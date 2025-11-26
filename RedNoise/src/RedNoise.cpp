@@ -25,6 +25,9 @@ enum RenderMode {
 
 RenderMode renderMode = RASTERIZED;
 
+glm::vec3 cameraPosition(0.0f, 0.0f, -3.0f);
+float focalLength = 2.0f;
+
 std::vector<float> interpolateSingleFloats(float from, float to, int numberOfValues) {
 	std::vector<float> result;
 	if (numberOfValues <= 1) {
@@ -274,9 +277,6 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
 }
 
 void drawWireframe(DrawingWindow &window) {
-	glm::vec3 cameraPosition(0.0f, 0.0f, -3.0f);
-	float focalLength = 2.0f;
-	
 	Colour white(255, 255, 255);
 	
 	for (const auto &modelTriangle : modelTriangles) {
@@ -291,9 +291,6 @@ void drawWireframe(DrawingWindow &window) {
 }
 
 void drawRasterized(DrawingWindow &window) {
-	glm::vec3 cameraPosition(0.0f, 0.0f, -3.0f);
-	float focalLength = 2.0f;
-	
 	for (const auto &modelTriangle : modelTriangles) {
 		CanvasPoint p0 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, modelTriangle.vertices[0]);
 		CanvasPoint p1 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, modelTriangle.vertices[1]);
@@ -324,10 +321,30 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
 			renderMode = RASTERIZED;
 			std::cout << "Switched to Rasterised Render" << std::endl;
 		}
-		else if (event.key.keysym.sym == SDLK_LEFT) std::cout << "LEFT" << std::endl;
-		else if (event.key.keysym.sym == SDLK_RIGHT) std::cout << "RIGHT" << std::endl;
-		else if (event.key.keysym.sym == SDLK_UP) std::cout << "UP" << std::endl;
-        else if (event.key.keysym.sym == SDLK_DOWN) std::cout << "DOWN" << std::endl;
+		else if (event.key.keysym.sym == SDLK_LEFT) {
+			cameraPosition.x -= 0.1f;
+			std::cout << "Camera moved left. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_RIGHT) {
+			cameraPosition.x += 0.1f;
+			std::cout << "Camera moved right. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_UP) {
+			cameraPosition.y += 0.1f;
+			std::cout << "Camera moved up. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_DOWN) {
+			cameraPosition.y -= 0.1f;
+			std::cout << "Camera moved down. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_w) {
+			cameraPosition.z -= 0.1f;
+			std::cout << "Camera moved forward. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_s) {
+			cameraPosition.z += 0.1f;
+			std::cout << "Camera moved backward. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
+		}
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
 		window.savePPM("output.ppm");
 		window.saveBMP("output.bmp");
