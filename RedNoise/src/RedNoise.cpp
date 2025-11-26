@@ -18,6 +18,13 @@
 
 std::vector<ModelTriangle> modelTriangles;
 
+enum RenderMode {
+	WIREFRAME = 0,
+	RASTERIZED = 1
+};
+
+RenderMode renderMode = RASTERIZED;
+
 std::vector<float> interpolateSingleFloats(float from, float to, int numberOfValues) {
 	std::vector<float> result;
 	if (numberOfValues <= 1) {
@@ -205,6 +212,67 @@ void drawStrokedTriangle(DrawingWindow &window, const CanvasTriangle &triangle, 
 	drawLine(window, triangle[2], triangle[0], colour);
 }
 
+void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, const Colour &colour) {
+	CanvasPoint p0 = triangle[0];
+	CanvasPoint p1 = triangle[1];
+	CanvasPoint p2 = triangle[2];
+	
+	if (p0.y > p1.y) std::swap(p0, p1);
+	if (p0.y > p2.y) std::swap(p0, p2);
+	if (p1.y > p2.y) std::swap(p1, p2);
+	
+	uint32_t fillColour = (255 << 24) + (colour.red << 16) + (colour.green << 8) + colour.blue;
+	
+	int startY = (int)round(p0.y);
+	int endY = (int)round(p2.y);
+	
+	for (int y = startY; y <= endY; y++) {
+		float t;
+		float leftX, rightX;
+		
+		if (y <= p1.y) {
+			if (p1.y != p0.y) {
+				t = (y - p0.y) / (p1.y - p0.y);
+				leftX = p0.x + t * (p1.x - p0.x);
+			} else {
+				leftX = p0.x;
+			}
+			
+			if (p2.y != p0.y) {
+				t = (y - p0.y) / (p2.y - p0.y);
+				rightX = p0.x + t * (p2.x - p0.x);
+			} else {
+				rightX = p0.x;
+			}
+		} else {
+			if (p2.y != p1.y) {
+				t = (y - p1.y) / (p2.y - p1.y);
+				leftX = p1.x + t * (p2.x - p1.x);
+			} else {
+				leftX = p1.x;
+			}
+			
+			if (p2.y != p0.y) {
+				t = (y - p0.y) / (p2.y - p0.y);
+				rightX = p0.x + t * (p2.x - p0.x);
+			} else {
+				rightX = p0.x;
+			}
+		}
+		
+		if (leftX > rightX) std::swap(leftX, rightX);
+		
+		int startX = (int)round(leftX);
+		int endX = (int)round(rightX);
+		
+		for (int x = startX; x <= endX; x++) {
+			if (x >= 0 && x < window.width && y >= 0 && y < window.height) {
+				window.setPixelColour(x, y, fillColour);
+			}
+		}
+	}
+}
+
 void drawWireframe(DrawingWindow &window) {
 	glm::vec3 cameraPosition(0.0f, 0.0f, -3.0f);
 	float focalLength = 2.0f;
@@ -222,14 +290,41 @@ void drawWireframe(DrawingWindow &window) {
 	}
 }
 
+void drawRasterized(DrawingWindow &window) {
+	glm::vec3 cameraPosition(0.0f, 0.0f, -3.0f);
+	float focalLength = 2.0f;
+	
+	for (const auto &modelTriangle : modelTriangles) {
+		CanvasPoint p0 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, modelTriangle.vertices[0]);
+		CanvasPoint p1 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, modelTriangle.vertices[1]);
+		CanvasPoint p2 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, modelTriangle.vertices[2]);
+		
+		CanvasTriangle canvasTriangle(p0, p1, p2);
+		
+		drawFilledTriangle(window, canvasTriangle, modelTriangle.colour);
+	}
+}
+
 void draw(DrawingWindow &window) {
 	window.clearPixels();
-	drawWireframe(window);
+	if (renderMode == WIREFRAME) {
+		drawWireframe(window);
+	} else {
+		drawRasterized(window);
+	}
 }
 
 void handleEvent(SDL_Event event, DrawingWindow &window) {
 	if (event.type == SDL_KEYDOWN) {
-		if (event.key.keysym.sym == SDLK_LEFT) std::cout << "LEFT" << std::endl;
+		if (event.key.keysym.sym == SDLK_1) {
+			renderMode = WIREFRAME;
+			std::cout << "Switched to Wireframe Render" << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_2) {
+			renderMode = RASTERIZED;
+			std::cout << "Switched to Rasterised Render" << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_LEFT) std::cout << "LEFT" << std::endl;
 		else if (event.key.keysym.sym == SDLK_RIGHT) std::cout << "RIGHT" << std::endl;
 		else if (event.key.keysym.sym == SDLK_UP) std::cout << "UP" << std::endl;
         else if (event.key.keysym.sym == SDLK_DOWN) std::cout << "DOWN" << std::endl;
