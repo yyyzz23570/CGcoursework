@@ -102,7 +102,7 @@ std::map<std::string, Colour> loadMTLFile(const std::string &filename) {
 	return materials;
 }
 
-std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::string &mtlPath, float scaleFactor = 1.0f) {
+std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::string &mtlPath, float scaleFactor = 1.0f, glm::vec3 translate = glm::vec3(0.0f, 0.0f, 0.0f)) {
 	std::vector<ModelTriangle> triangles;
 	std::vector<glm::vec3> vertices;
 	std::map<std::string, Colour> materials = loadMTLFile(mtlPath);
@@ -123,7 +123,8 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
 		if (token == "v") {
 			float x, y, z;
 			iss >> x >> y >> z;
-			vertices.push_back(glm::vec3(x * scaleFactor, y * scaleFactor, z * scaleFactor));
+			glm::vec3 vertex = glm::vec3(x * scaleFactor, y * scaleFactor, z * scaleFactor) + translate;
+			vertices.push_back(vertex);
 		} else if (token == "usemtl") {
 			std::string materialName;
 			iss >> materialName;
@@ -336,8 +337,25 @@ int main(int argc, char *argv[]) {
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
 	SDL_Event event;
 	
-	float scaleFactor = 0.35f;
-	modelTriangles = loadOBJFile("cornell-box.obj", "cornell-box.mtl", scaleFactor);
+	float boxScale = 0.35f;
+	std::vector<ModelTriangle> boxTriangles = loadOBJFile("cornell-box.obj", "cornell-box.mtl", boxScale);
+	modelTriangles.insert(modelTriangles.end(), boxTriangles.begin(), boxTriangles.end());
+	
+	float sphereScale = 0.25f;
+	float floorY = -2.74f * boxScale;
+	float sphereCenterY = 1.5f * sphereScale;
+	float sphereRadius = 1.0f * sphereScale;
+	float sphereBottomY = sphereCenterY - sphereRadius;
+	float translateY = floorY - sphereBottomY;
+	glm::vec3 sphereTranslate(-0.7f, translateY, 0.0f);
+	std::vector<ModelTriangle> sphereTriangles = loadOBJFile("sphere.obj", "", sphereScale, sphereTranslate);
+	
+	Colour pink(255, 192, 203);
+	for (auto &triangle : sphereTriangles) {
+		triangle.colour = pink;
+	}
+	
+	modelTriangles.insert(modelTriangles.end(), sphereTriangles.begin(), sphereTriangles.end());
 	
 	while (true) {
 		if (window.pollForInputEvents(event)) handleEvent(event, window);
