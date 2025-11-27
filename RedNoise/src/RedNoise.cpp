@@ -12,11 +12,13 @@
 #include <map>
 #include <sstream>
 #include <glm/glm.hpp>
+#include <limits>
 
 #define WIDTH 640
 #define HEIGHT 480
 
 std::vector<ModelTriangle> modelTriangles;
+std::vector<float> depthBuffer(WIDTH * HEIGHT, std::numeric_limits<float>::max());
 
 enum RenderMode {
 	WIREFRAME = 0,
@@ -25,7 +27,7 @@ enum RenderMode {
 
 RenderMode renderMode = RASTERIZED;
 
-glm::vec3 cameraPosition(0.0f, 0.0f, -3.0f);
+glm::vec3 cameraPosition(0.0f, 0.0f, 4.0f);
 float focalLength = 2.0f;
 
 std::vector<float> interpolateSingleFloats(float from, float to, int numberOfValues) {
@@ -46,7 +48,10 @@ void drawLine(DrawingWindow &window, CanvasPoint from, CanvasPoint to, Colour co
 	float xDiff = to.x - from.x;
 	float yDiff = to.y - from.y;
 	
-	float numberOfSteps = std::max(std::abs(xDiff), std::abs(yDiff));
+	int numberOfSteps = static_cast<int>(std::max(std::abs(xDiff), std::abs(yDiff))) + 1;
+	if (numberOfSteps <= 0) {
+		numberOfSteps = 1;
+	}
 	
 	std::vector<float> xValues = interpolateSingleFloats(from.x, to.x, numberOfSteps);
 	std::vector<float> yValues = interpolateSingleFloats(from.y, to.y, numberOfSteps);
@@ -69,11 +74,8 @@ std::map<std::string, Colour> loadMTLFile(const std::string &filename) {
 	std::string currentMaterial;
 	
 	if (!file.is_open()) {
-		std::cerr << "Error: Cannot open MTL file: " << filename << std::endl;
 		return materials;
 	}
-	
-	std::cout << "Loading materials from: " << filename << std::endl;
 	
 	while (std::getline(file, line)) {
 		if (line.empty()) continue;
@@ -93,15 +95,10 @@ std::map<std::string, Colour> loadMTLFile(const std::string &filename) {
 				static_cast<int>(g * 255),
 				static_cast<int>(b * 255)
 			);
-			std::cout << "  Loaded material: " << currentMaterial 
-			          << " (RGB: " << static_cast<int>(r * 255) << ", " 
-			          << static_cast<int>(g * 255) << ", " 
-			          << static_cast<int>(b * 255) << ")" << std::endl;
 		}
 	}
 	
 	file.close();
-	std::cout << "Total materials loaded: " << materials.size() << std::endl;
 	return materials;
 }
 
@@ -115,7 +112,6 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
 	std::string line;
 	
 	if (!file.is_open()) {
-		std::cerr << "Error: Cannot open OBJ file: " << filename << std::endl;
 		return triangles;
 	}
 	
@@ -133,14 +129,12 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
 			iss >> materialName;
 			if (materials.find(materialName) != materials.end()) {
 				currentColour = materials[materialName];
-			} else {
-				std::cerr << "Warning: Material '" << materialName << "' not found, using default color" << std::endl;
 			}
 		} else if (token == "f") {
 			std::vector<int> vertexIndices;
 			
 			std::string vertexStr;
-			std::string remainingLine = line.substr(1);
+			std::string remainingLine = (line.length() > 1) ? line.substr(1) : "";
 			std::istringstream faceIss(remainingLine);
 			
 			while (faceIss >> vertexStr) {
@@ -178,7 +172,6 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
 	}
 	
 	file.close();
-	std::cout << "Loaded " << triangles.size() << " triangles from " << filename << std::endl;
 	return triangles;
 }
 
@@ -187,10 +180,10 @@ CanvasPoint projectVertexOntoCanvasPoint(glm::vec3 cameraPosition, float focalLe
 	
 	float x = vertexInCameraSpace.x;
 	float y = vertexInCameraSpace.y;
-	float z = vertexInCameraSpace.z;
+	float z = -vertexInCameraSpace.z;  // 反转 z 轴，使相机朝向 -z 方向
 	
 	if (z <= 0) {
-		z = 0.1f;
+		z = 0.0001f;
 	}
 	
 	float u = focalLength * (x / z) + WIDTH * 0.5f;
@@ -232,45 +225,70 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
 	for (int y = startY; y <= endY; y++) {
 		float t;
 		float leftX, rightX;
+		float leftDepth, rightDepth;
 		
 		if (y <= p1.y) {
 			if (p1.y != p0.y) {
 				t = (y - p0.y) / (p1.y - p0.y);
 				leftX = p0.x + t * (p1.x - p0.x);
+				leftDepth = p0.depth + t * (p1.depth - p0.depth);
 			} else {
 				leftX = p0.x;
+				leftDepth = p0.depth;
 			}
 			
 			if (p2.y != p0.y) {
 				t = (y - p0.y) / (p2.y - p0.y);
 				rightX = p0.x + t * (p2.x - p0.x);
+				rightDepth = p0.depth + t * (p2.depth - p0.depth);
 			} else {
 				rightX = p0.x;
+				rightDepth = p0.depth;
 			}
 		} else {
 			if (p2.y != p1.y) {
 				t = (y - p1.y) / (p2.y - p1.y);
 				leftX = p1.x + t * (p2.x - p1.x);
+				leftDepth = p1.depth + t * (p2.depth - p1.depth);
 			} else {
 				leftX = p1.x;
+				leftDepth = p1.depth;
 			}
 			
 			if (p2.y != p0.y) {
 				t = (y - p0.y) / (p2.y - p0.y);
 				rightX = p0.x + t * (p2.x - p0.x);
+				rightDepth = p0.depth + t * (p2.depth - p0.depth);
 			} else {
 				rightX = p0.x;
+				rightDepth = p0.depth;
 			}
 		}
 		
-		if (leftX > rightX) std::swap(leftX, rightX);
+		if (leftX > rightX) {
+			std::swap(leftX, rightX);
+			std::swap(leftDepth, rightDepth);
+		}
 		
 		int startX = (int)round(leftX);
 		int endX = (int)round(rightX);
 		
 		for (int x = startX; x <= endX; x++) {
 			if (x >= 0 && x < window.width && y >= 0 && y < window.height) {
-				window.setPixelColour(x, y, fillColour);
+				size_t pixelIndex = y * window.width + x;
+				
+				float depth;
+				if (endX != startX) {
+					float tX = (x - leftX) / (rightX - leftX);
+					depth = leftDepth + tX * (rightDepth - leftDepth);
+				} else {
+					depth = leftDepth;
+				}
+				
+				if (depth < depthBuffer[pixelIndex] && depth > 0) {
+					depthBuffer[pixelIndex] = depth;
+					window.setPixelColour(x, y, fillColour);
+				}
 			}
 		}
 	}
@@ -302,8 +320,13 @@ void drawRasterized(DrawingWindow &window) {
 	}
 }
 
+void clearDepthBuffer() {
+	std::fill(depthBuffer.begin(), depthBuffer.end(), std::numeric_limits<float>::max());
+}
+
 void draw(DrawingWindow &window) {
 	window.clearPixels();
+	clearDepthBuffer();
 	if (renderMode == WIREFRAME) {
 		drawWireframe(window);
 	} else {
@@ -315,35 +338,27 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
 	if (event.type == SDL_KEYDOWN) {
 		if (event.key.keysym.sym == SDLK_1) {
 			renderMode = WIREFRAME;
-			std::cout << "Switched to Wireframe Render" << std::endl;
 		}
 		else if (event.key.keysym.sym == SDLK_2) {
 			renderMode = RASTERIZED;
-			std::cout << "Switched to Rasterised Render" << std::endl;
 		}
 		else if (event.key.keysym.sym == SDLK_LEFT) {
 			cameraPosition.x -= 0.1f;
-			std::cout << "Camera moved left. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
 		}
 		else if (event.key.keysym.sym == SDLK_RIGHT) {
 			cameraPosition.x += 0.1f;
-			std::cout << "Camera moved right. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
 		}
 		else if (event.key.keysym.sym == SDLK_UP) {
 			cameraPosition.y += 0.1f;
-			std::cout << "Camera moved up. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
 		}
 		else if (event.key.keysym.sym == SDLK_DOWN) {
 			cameraPosition.y -= 0.1f;
-			std::cout << "Camera moved down. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
 		}
 		else if (event.key.keysym.sym == SDLK_w) {
 			cameraPosition.z -= 0.1f;
-			std::cout << "Camera moved forward. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
 		}
 		else if (event.key.keysym.sym == SDLK_s) {
 			cameraPosition.z += 0.1f;
-			std::cout << "Camera moved backward. Position: (" << cameraPosition.x << ", " << cameraPosition.y << ", " << cameraPosition.z << ")" << std::endl;
 		}
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
 		window.savePPM("output.ppm");
@@ -357,21 +372,6 @@ int main(int argc, char *argv[]) {
 	
 	float scaleFactor = 0.35f;
 	modelTriangles = loadOBJFile("cornell-box.obj", "cornell-box.mtl", scaleFactor);
-	
-	std::cout << "\n=== Verifying loaded triangles ===" << std::endl;
-	size_t numToPrint = std::min(static_cast<size_t>(5), modelTriangles.size());
-	for (size_t i = 0; i < numToPrint; i++) {
-		std::cout << "Triangle " << i << ":" << std::endl;
-		std::cout << modelTriangles[i] << std::endl;
-		std::cout << "  Colour: " << modelTriangles[i].colour.name 
-		          << " (RGB: " << modelTriangles[i].colour.red << ", " 
-		          << modelTriangles[i].colour.green << ", " 
-		          << modelTriangles[i].colour.blue << ")" << std::endl;
-	}
-	if (modelTriangles.size() > numToPrint) {
-		std::cout << "... and " << (modelTriangles.size() - numToPrint) << " more triangles" << std::endl;
-	}
-	std::cout << "===================================\n" << std::endl;
 	
 	while (true) {
 		if (window.pollForInputEvents(event)) handleEvent(event, window);
