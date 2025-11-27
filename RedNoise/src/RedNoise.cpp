@@ -34,7 +34,30 @@ RenderMode renderMode = RASTERIZED;
 glm::vec3 cameraPosition(0.0f, 0.0f, 4.0f);
 float focalLength = 2.0f;
 
+// 场景旋转相关
+float sceneRotationY = 0.0f;  // 整个场景绕y轴的旋转角度（弧度）
+glm::vec3 sceneCenter(0.0f, 0.0f, 0.0f);  // 场景旋转中心点（原点）
+
 // ----------------- 工具函数 -----------------
+
+// 创建绕y轴旋转的矩阵
+glm::mat3 rotateY(float angle) {
+    float c = cos(angle);
+    float s = sin(angle);
+    return glm::mat3(
+        c,  0.0f, s,
+        0.0f, 1.0f, 0.0f,
+        -s, 0.0f, c
+    );
+}
+
+// 将顶点绕指定中心点旋转
+glm::vec3 rotateVertexAroundPoint(const glm::vec3& vertex, const glm::vec3& center, float angleY) {
+    glm::vec3 relativePos = vertex - center;
+    glm::mat3 rotationMatrix = rotateY(angleY);
+    glm::vec3 rotatedRelative = rotationMatrix * relativePos;
+    return center + rotatedRelative;
+}
 
 std::vector<float> interpolateSingleFloats(float from, float to, int numberOfValues) {
     std::vector<float> result;
@@ -271,9 +294,14 @@ void drawWireframe(DrawingWindow &window) {
     Colour white(255, 255, 255);
 
     for (const auto &modelTriangle : modelTriangles) {
-        CanvasPoint p0 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, modelTriangle.vertices[0]);
-        CanvasPoint p1 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, modelTriangle.vertices[1]);
-        CanvasPoint p2 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, modelTriangle.vertices[2]);
+        // 对所有三角形应用场景旋转
+        glm::vec3 v0 = rotateVertexAroundPoint(modelTriangle.vertices[0], sceneCenter, sceneRotationY);
+        glm::vec3 v1 = rotateVertexAroundPoint(modelTriangle.vertices[1], sceneCenter, sceneRotationY);
+        glm::vec3 v2 = rotateVertexAroundPoint(modelTriangle.vertices[2], sceneCenter, sceneRotationY);
+        
+        CanvasPoint p0 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v0);
+        CanvasPoint p1 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v1);
+        CanvasPoint p2 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v2);
 
         CanvasTriangle canvasTriangle(p0, p1, p2);
 
@@ -283,9 +311,14 @@ void drawWireframe(DrawingWindow &window) {
 
 void drawRasterized(DrawingWindow &window) {
     for (const auto &modelTriangle : modelTriangles) {
-        CanvasPoint p0 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, modelTriangle.vertices[0]);
-        CanvasPoint p1 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, modelTriangle.vertices[1]);
-        CanvasPoint p2 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, modelTriangle.vertices[2]);
+        // 对所有三角形应用场景旋转
+        glm::vec3 v0 = rotateVertexAroundPoint(modelTriangle.vertices[0], sceneCenter, sceneRotationY);
+        glm::vec3 v1 = rotateVertexAroundPoint(modelTriangle.vertices[1], sceneCenter, sceneRotationY);
+        glm::vec3 v2 = rotateVertexAroundPoint(modelTriangle.vertices[2], sceneCenter, sceneRotationY);
+        
+        CanvasPoint p0 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v0);
+        CanvasPoint p1 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v1);
+        CanvasPoint p2 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v2);
 
         CanvasTriangle canvasTriangle(p0, p1, p2);
 
@@ -328,7 +361,9 @@ bool handleEvent(SDL_Event event, DrawingWindow &window) {
 bool updateCamera(float deltaTime) {
     const Uint8 *keyState = SDL_GetKeyboardState(NULL);
     const float cameraSpeed = 2.0f * deltaTime; // 每秒2个单位
+    const float rotationSpeed = 2.0f * deltaTime; // 每秒2弧度
     bool cameraMoved = false;
+    bool objectRotated = false;
 
     if (keyState[SDL_SCANCODE_LEFT]) {
         cameraPosition.x -= cameraSpeed;
@@ -354,8 +389,18 @@ bool updateCamera(float deltaTime) {
         cameraPosition.z += cameraSpeed;
         cameraMoved = true;
     }
+    
+    // 处理场景旋转：a键逆时针，d键顺时针
+    if (keyState[SDL_SCANCODE_A]) {
+        sceneRotationY += rotationSpeed;
+        objectRotated = true;
+    }
+    if (keyState[SDL_SCANCODE_D]) {
+        sceneRotationY -= rotationSpeed;
+        objectRotated = true;
+    }
 
-    return cameraMoved;
+    return cameraMoved || objectRotated;
 }
 
 int main(int argc, char *argv[]) {
