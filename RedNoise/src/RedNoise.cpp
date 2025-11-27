@@ -176,33 +176,18 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
 }
 
 CanvasPoint projectVertexOntoCanvasPoint(glm::vec3 cameraPosition, float focalLength, glm::vec3 vertexPosition) {
-	glm::vec3 vertexInCameraSpace = vertexPosition - cameraPosition;
+	float x = vertexPosition.x - cameraPosition.x;
+	float y = vertexPosition.y - cameraPosition.y;
+	float z = cameraPosition.z - vertexPosition.z;
 	
-	float x = vertexInCameraSpace.x;
-	float y = vertexInCameraSpace.y;
-	float z = -vertexInCameraSpace.z;  // 反转 z 轴，使相机朝向 -z 方向
+	if (z <= 0) z = 0.0001f;
 	
-	if (z <= 0) {
-		z = 0.0001f;
-	}
+	float u = focalLength * (x / z) * 160.0f + WIDTH * 0.5f;
+	float v = HEIGHT - (focalLength * (y / z) * 160.0f + HEIGHT * 0.5f);
 	
-	float u = focalLength * (x / z) + WIDTH * 0.5f;
-	float v = focalLength * (y / z) + HEIGHT * 0.5f;
+	float depth = 1.0f / z;
 	
-	float imagePlaneScale = 160.0f;
-	
-	float offsetX = (u - WIDTH * 0.5f) * imagePlaneScale;
-	float offsetY = (v - HEIGHT * 0.5f) * imagePlaneScale;
-	
-	u = offsetX + WIDTH * 0.5f;
-	v = offsetY + HEIGHT * 0.5f;
-	
-	v = HEIGHT - v;
-	
-	// 使用逆深度 1/z 而不是原始深度 z
-	float inverseDepth = 1.0f / z;
-	
-	return CanvasPoint(u, v, inverseDepth);
+	return CanvasPoint(u, v, depth);
 }
 
 void drawStrokedTriangle(DrawingWindow &window, const CanvasTriangle &triangle, const Colour &colour) {
@@ -226,46 +211,25 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
 	int endY = (int)round(p2.y);
 	
 	for (int y = startY; y <= endY; y++) {
-		float t;
-		float leftX, rightX;
-		float leftDepth, rightDepth;
+		float leftX, rightX, leftDepth, rightDepth;
 		
 		if (y <= p1.y) {
-			if (p1.y != p0.y) {
-				t = (y - p0.y) / (p1.y - p0.y);
-				leftX = p0.x + t * (p1.x - p0.x);
-				leftDepth = p0.depth + t * (p1.depth - p0.depth);
-			} else {
-				leftX = p0.x;
-				leftDepth = p0.depth;
-			}
+			float t1 = (p1.y != p0.y) ? (y - p0.y) / (p1.y - p0.y) : 0;
+			leftX = p0.x + t1 * (p1.x - p0.x);
+			leftDepth = p0.depth + t1 * (p1.depth - p0.depth);
 			
-			if (p2.y != p0.y) {
-				t = (y - p0.y) / (p2.y - p0.y);
-				rightX = p0.x + t * (p2.x - p0.x);
-				rightDepth = p0.depth + t * (p2.depth - p0.depth);
-			} else {
-				rightX = p0.x;
-				rightDepth = p0.depth;
-			}
-		} else {
-			if (p2.y != p1.y) {
-				t = (y - p1.y) / (p2.y - p1.y);
-				leftX = p1.x + t * (p2.x - p1.x);
-				leftDepth = p1.depth + t * (p2.depth - p1.depth);
-			} else {
-				leftX = p1.x;
-				leftDepth = p1.depth;
-			}
+			float t2 = (p2.y != p0.y) ? (y - p0.y) / (p2.y - p0.y) : 0;
+			rightX = p0.x + t2 * (p2.x - p0.x);
+			rightDepth = p0.depth + t2 * (p2.depth - p0.depth);
+		}
+		else {
+			float t1 = (p2.y != p1.y) ? (y - p1.y) / (p2.y - p1.y) : 0;
+			leftX = p1.x + t1 * (p2.x - p1.x);
+			leftDepth = p1.depth + t1 * (p2.depth - p1.depth);
 			
-			if (p2.y != p0.y) {
-				t = (y - p0.y) / (p2.y - p0.y);
-				rightX = p0.x + t * (p2.x - p0.x);
-				rightDepth = p0.depth + t * (p2.depth - p0.depth);
-			} else {
-				rightX = p0.x;
-				rightDepth = p0.depth;
-			}
+			float t2 = (p2.y != p0.y) ? (y - p0.y) / (p2.y - p0.y) : 0;
+			rightX = p0.x + t2 * (p2.x - p0.x);
+			rightDepth = p0.depth + t2 * (p2.depth - p0.depth);
 		}
 		
 		if (leftX > rightX) {
@@ -278,17 +242,13 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
 		
 		for (int x = startX; x <= endX; x++) {
 			if (x >= 0 && x < window.width && y >= 0 && y < window.height) {
-				size_t pixelIndex = y * window.width + x;
-				
-				float depth;
+				float depth = leftDepth;
 				if (endX != startX) {
-					float tX = (x - leftX) / (rightX - leftX);
-					depth = leftDepth + tX * (rightDepth - leftDepth);
-				} else {
-					depth = leftDepth;
+					float t = (x - leftX) / (rightX - leftX);
+					depth = leftDepth + t * (rightDepth - leftDepth);
 				}
 				
-				// 使用逆深度：更大的 1/Z 表示更近的物体
+				int pixelIndex = y * window.width + x;
 				if (depth > depthBuffer[pixelIndex] && depth > 0) {
 					depthBuffer[pixelIndex] = depth;
 					window.setPixelColour(x, y, fillColour);
@@ -325,7 +285,9 @@ void drawRasterized(DrawingWindow &window) {
 }
 
 void clearDepthBuffer() {
-	std::fill(depthBuffer.begin(), depthBuffer.end(), 0.0f);
+	for (int i = 0; i < WIDTH * HEIGHT; i++) {
+		depthBuffer[i] = 0.0f;
+	}
 }
 
 void draw(DrawingWindow &window) {
