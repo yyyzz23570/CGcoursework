@@ -18,7 +18,7 @@
 #define HEIGHT 480
 
 std::vector<ModelTriangle> modelTriangles;
-std::vector<float> depthBuffer(WIDTH * HEIGHT, std::numeric_limits<float>::max());
+std::vector<float> depthBuffer(WIDTH * HEIGHT, 0.0f);
 
 enum RenderMode {
 	WIREFRAME = 0,
@@ -199,7 +199,10 @@ CanvasPoint projectVertexOntoCanvasPoint(glm::vec3 cameraPosition, float focalLe
 	
 	v = HEIGHT - v;
 	
-	return CanvasPoint(u, v, z);
+	// 使用逆深度 1/z 而不是原始深度 z
+	float inverseDepth = 1.0f / z;
+	
+	return CanvasPoint(u, v, inverseDepth);
 }
 
 void drawStrokedTriangle(DrawingWindow &window, const CanvasTriangle &triangle, const Colour &colour) {
@@ -285,7 +288,8 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
 					depth = leftDepth;
 				}
 				
-				if (depth < depthBuffer[pixelIndex] && depth > 0) {
+				// 使用逆深度：更大的 1/Z 表示更近的物体
+				if (depth > depthBuffer[pixelIndex] && depth > 0) {
 					depthBuffer[pixelIndex] = depth;
 					window.setPixelColour(x, y, fillColour);
 				}
@@ -321,7 +325,7 @@ void drawRasterized(DrawingWindow &window) {
 }
 
 void clearDepthBuffer() {
-	std::fill(depthBuffer.begin(), depthBuffer.end(), std::numeric_limits<float>::max());
+	std::fill(depthBuffer.begin(), depthBuffer.end(), 0.0f);
 }
 
 void draw(DrawingWindow &window) {
