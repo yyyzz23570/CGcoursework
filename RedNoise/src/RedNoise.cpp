@@ -5,6 +5,8 @@
 #include <Colour.h>
 #include <ModelTriangle.h>
 #include <RayTriangleIntersection.h>
+#include <TextureMap.h>
+#include <TexturePoint.h>
 
 #include <fstream>
 #include <vector>
@@ -22,6 +24,8 @@
 
 std::vector<ModelTriangle> modelTriangles;
 std::vector<float> depthBuffer(WIDTH * HEIGHT, -std::numeric_limits<float>::infinity());
+std::map<std::string, TextureMap> textureMaps;
+std::map<std::string, std::string> materialToTexture;
 
 enum RenderMode {
     WIREFRAME = 0,
@@ -91,8 +95,13 @@ void drawLine(DrawingWindow &window, CanvasPoint from, CanvasPoint to, Colour co
     }
 }
 
-std::map<std::string, Colour> loadMTLFile(const std::string &filename) {
-    std::map<std::string, Colour> materials;
+struct MaterialInfo {
+    Colour colour;
+    std::string textureFilename;
+};
+
+std::map<std::string, MaterialInfo> loadMTLFile(const std::string &filename) {
+    std::map<std::string, MaterialInfo> materials;
     std::ifstream file;
     std::string line;
     std::string currentMaterial;
@@ -127,15 +136,20 @@ std::map<std::string, Colour> loadMTLFile(const std::string &filename) {
 
         if (token == "newmtl") {
             iss >> currentMaterial;
+            materials[currentMaterial] = MaterialInfo();
         } else if (token == "Kd" && !currentMaterial.empty()) {
             float r, g, b;
             iss >> r >> g >> b;
-            materials[currentMaterial] = Colour(
+            materials[currentMaterial].colour = Colour(
                 currentMaterial,
                 static_cast<int>(r * 255),
                 static_cast<int>(g * 255),
                 static_cast<int>(b * 255)
             );
+        } else if (token == "map_Kd" && !currentMaterial.empty()) {
+            std::string textureFile;
+            iss >> textureFile;
+            materials[currentMaterial].textureFilename = textureFile;
         }
     }
 
@@ -146,8 +160,10 @@ std::map<std::string, Colour> loadMTLFile(const std::string &filename) {
 std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::string &mtlPath, float scaleFactor = 1.0f, glm::vec3 translate = glm::vec3(0.0f, 0.0f, 0.0f)) {
     std::vector<ModelTriangle> triangles;
     std::vector<glm::vec3> vertices;
-    std::map<std::string, Colour> materials = loadMTLFile(mtlPath);
-    Colour currentColour(255, 255, 255);
+    std::vector<TexturePoint> textureCoords;
+    std::map<std::string, MaterialInfo> materials = loadMTLFile(mtlPath);
+    MaterialInfo currentMaterial;
+    currentMaterial.colour = Colour(255, 255, 255);
 
     std::ifstream file;
     std::string line;
@@ -183,14 +199,35 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
             iss >> x >> y >> z;
             glm::vec3 vertex = glm::vec3(x * scaleFactor, y * scaleFactor, z * scaleFactor) + translate;
             vertices.push_back(vertex);
+        } else if (token == "vt") {
+            float u, v;
+            iss >> u >> v;
+            textureCoords.push_back(TexturePoint(u, v));
         } else if (token == "usemtl") {
             std::string materialName;
             iss >> materialName;
             if (materials.find(materialName) != materials.end()) {
-                currentColour = materials[materialName];
+                currentMaterial = materials[materialName];
+                if (!currentMaterial.textureFilename.empty()) {
+                    materialToTexture[materialName] = currentMaterial.textureFilename;
+                    // Load texture if not already loaded
+                    if (textureMaps.find(currentMaterial.textureFilename) == textureMaps.end()) {
+                        std::vector<std::string> paths = {
+                            currentMaterial.textureFilename, "../" + currentMaterial.textureFilename,
+                            "../../" + currentMaterial.textureFilename, "./" + currentMaterial.textureFilename
+                        };
+                        for (const auto &path : paths) {
+                            try {
+                                textureMaps[currentMaterial.textureFilename] = TextureMap(path);
+                                break;
+                            } catch (...) {}
+                        }
+                    }
+                }
             }
         } else if (token == "f") {
             std::vector<int> vertexIndices;
+            std::vector<int> textureIndices;
 
             std::string vertexStr;
             std::string remainingLine = (line.length() > 1) ? line.substr(1) : "";
@@ -199,20 +236,30 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
             while (faceIss >> vertexStr) {
                 if (vertexStr.empty()) continue;
 
-                size_t slashPos = vertexStr.find('/');
-                if (slashPos != std::string::npos) {
-                    vertexStr = vertexStr.substr(0, slashPos);
+                std::vector<std::string> parts;
+                std::stringstream ss(vertexStr);
+                std::string part;
+                while (std::getline(ss, part, '/')) {
+                    parts.push_back(part);
                 }
 
-                if (!vertexStr.empty()) {
+                int vertexIdx = -1;
+                int textureIdx = -1;
+
+                if (parts.size() > 0 && !parts[0].empty()) {
                     try {
-                        int idx = std::stoi(vertexStr) - 1;
-                        if (idx >= 0 && idx < static_cast<int>(vertices.size())) {
-                            vertexIndices.push_back(idx);
-                        }
-                    } catch (const std::exception &e) {
-                        continue;
-                    }
+                        vertexIdx = std::stoi(parts[0]) - 1;
+                    } catch (...) {}
+                }
+                if (parts.size() > 1 && !parts[1].empty()) {
+                    try {
+                        textureIdx = std::stoi(parts[1]) - 1;
+                    } catch (...) {}
+                }
+
+                if (vertexIdx >= 0 && vertexIdx < static_cast<int>(vertices.size())) {
+                    vertexIndices.push_back(vertexIdx);
+                    textureIndices.push_back(textureIdx);
                 }
             }
 
@@ -222,8 +269,20 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
                         vertices[vertexIndices[0]],
                         vertices[vertexIndices[i]],
                         vertices[vertexIndices[i + 1]],
-                        currentColour
+                        currentMaterial.colour
                     );
+                    
+                    // Set texture coordinates if available
+                    if (textureIndices[0] >= 0 && textureIndices[0] < static_cast<int>(textureCoords.size())) {
+                        triangle.texturePoints[0] = textureCoords[textureIndices[0]];
+                    }
+                    if (textureIndices[i] >= 0 && textureIndices[i] < static_cast<int>(textureCoords.size())) {
+                        triangle.texturePoints[1] = textureCoords[textureIndices[i]];
+                    }
+                    if (textureIndices[i + 1] >= 0 && textureIndices[i + 1] < static_cast<int>(textureCoords.size())) {
+                        triangle.texturePoints[2] = textureCoords[textureIndices[i + 1]];
+                    }
+                    
                     triangles.push_back(triangle);
                 }
             }
@@ -234,7 +293,7 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
     return triangles;
 }
 
-CanvasPoint projectVertexOntoCanvasPoint(glm::vec3 cameraPosition, float focalLength, glm::vec3 vertexPosition) {
+CanvasPoint projectVertexOntoCanvasPoint(glm::vec3 cameraPosition, float focalLength, glm::vec3 vertexPosition, TexturePoint texturePoint = TexturePoint(-1, -1)) {
     float x = vertexPosition.x - cameraPosition.x;
     float y = vertexPosition.y - cameraPosition.y;
     float z = cameraPosition.z - vertexPosition.z;
@@ -245,7 +304,9 @@ CanvasPoint projectVertexOntoCanvasPoint(glm::vec3 cameraPosition, float focalLe
     float v = HEIGHT - (focalLength * (y / z) * 160.0f + HEIGHT * 0.5f);
     float depth = 1.0f / z;
 
-    return CanvasPoint(u, v, depth);
+    CanvasPoint point(u, v, depth);
+    point.texturePoint = texturePoint;
+    return point;
 }
 
 void drawStrokedTriangle(DrawingWindow &window, const CanvasTriangle &triangle, const Colour &colour) {
@@ -267,7 +328,31 @@ glm::vec3 computeBarycentric(const CanvasPoint &a, const CanvasPoint &b, const C
     return glm::vec3(w0, w1, w2);
 }
 
-void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, const Colour &colour) {
+uint32_t sampleTexture(const TextureMap &texture, float u, float v) {
+    // Clamp texture coordinates to [0, 1]
+    if (u < 0.0f) u = 0.0f;
+    if (u > 1.0f) u = 1.0f;
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    
+    // Convert to texture coordinates (flip V coordinate)
+    int texX = static_cast<int>(u * texture.width);
+    int texY = static_cast<int>((1.0f - v) * texture.height);
+    
+    // Clamp to valid range
+    if (texX < 0) texX = 0;
+    if (texX >= static_cast<int>(texture.width)) texX = texture.width - 1;
+    if (texY < 0) texY = 0;
+    if (texY >= static_cast<int>(texture.height)) texY = texture.height - 1;
+    
+    int index = texY * texture.width + texX;
+    if (index >= 0 && index < static_cast<int>(texture.pixels.size())) {
+        return texture.pixels[index];
+    }
+    return 0;
+}
+
+void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, const Colour &colour, const TextureMap *texture = nullptr) {
     CanvasPoint p0 = triangle[0];
     CanvasPoint p1 = triangle[1];
     CanvasPoint p2 = triangle[2];
@@ -286,6 +371,11 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
 
     if (minX > maxX || minY > maxY) return;
 
+    bool hasTexture = texture != nullptr && 
+                      p0.texturePoint.x >= 0 && p0.texturePoint.y >= 0 &&
+                      p1.texturePoint.x >= 0 && p1.texturePoint.y >= 0 &&
+                      p2.texturePoint.x >= 0 && p2.texturePoint.y >= 0;
+
     for (int y = minY; y <= maxY; ++y) {
         for (int x = minX; x <= maxX; ++x) {
             float px = x + 0.5f;
@@ -300,7 +390,16 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
                 int pixelIndex = y * window.width + x;
                 if (depth > depthBuffer[pixelIndex]) {
                     depthBuffer[pixelIndex] = depth;
-                    window.setPixelColour(x, y, fillColour);
+                    
+                    if (hasTexture) {
+                        // Interpolate texture coordinates
+                        float texU = bary.x * p0.texturePoint.x + bary.y * p1.texturePoint.x + bary.z * p2.texturePoint.x;
+                        float texV = bary.x * p0.texturePoint.y + bary.y * p1.texturePoint.y + bary.z * p2.texturePoint.y;
+                        uint32_t texColour = sampleTexture(*texture, texU, texV);
+                        window.setPixelColour(x, y, texColour);
+                    } else {
+                        window.setPixelColour(x, y, fillColour);
+                    }
                 }
             }
         }
@@ -315,9 +414,9 @@ void drawWireframe(DrawingWindow &window) {
         glm::vec3 v1 = rotateVertexAroundPoint(modelTriangle.vertices[1], sceneCenter, sceneRotationY);
         glm::vec3 v2 = rotateVertexAroundPoint(modelTriangle.vertices[2], sceneCenter, sceneRotationY);
         
-        CanvasPoint p0 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v0);
-        CanvasPoint p1 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v1);
-        CanvasPoint p2 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v2);
+        CanvasPoint p0 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v0, modelTriangle.texturePoints[0]);
+        CanvasPoint p1 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v1, modelTriangle.texturePoints[1]);
+        CanvasPoint p2 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v2, modelTriangle.texturePoints[2]);
 
         CanvasTriangle canvasTriangle(p0, p1, p2);
         drawStrokedTriangle(window, canvasTriangle, white);
@@ -330,12 +429,25 @@ void drawRasterized(DrawingWindow &window) {
         glm::vec3 v1 = rotateVertexAroundPoint(modelTriangle.vertices[1], sceneCenter, sceneRotationY);
         glm::vec3 v2 = rotateVertexAroundPoint(modelTriangle.vertices[2], sceneCenter, sceneRotationY);
         
-        CanvasPoint p0 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v0);
-        CanvasPoint p1 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v1);
-        CanvasPoint p2 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v2);
+        CanvasPoint p0 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v0, modelTriangle.texturePoints[0]);
+        CanvasPoint p1 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v1, modelTriangle.texturePoints[1]);
+        CanvasPoint p2 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v2, modelTriangle.texturePoints[2]);
 
         CanvasTriangle canvasTriangle(p0, p1, p2);
-        drawFilledTriangle(window, canvasTriangle, modelTriangle.colour);
+        
+        // Use texture if triangle has texture coordinates and material has texture
+        const TextureMap *texture = nullptr;
+        if (modelTriangle.texturePoints[0].x >= 0 && !modelTriangle.colour.name.empty()) {
+            auto it = materialToTexture.find(modelTriangle.colour.name);
+            if (it != materialToTexture.end() && !it->second.empty()) {
+                auto texIt = textureMaps.find(it->second);
+                if (texIt != textureMaps.end()) {
+                    texture = &texIt->second;
+                }
+            }
+        }
+        
+        drawFilledTriangle(window, canvasTriangle, modelTriangle.colour, texture);
     }
 }
 
@@ -446,18 +558,69 @@ void drawRayTracedHardShadow(DrawingWindow &window) {
                 inShadow = true;
             }
 
-            Colour base = hit.intersectedTriangle.colour;
-            float brightness = inShadow ? ambient : 1.0f;
-
-            int r = static_cast<int>(base.red   * brightness);
-            int g = static_cast<int>(base.green * brightness);
-            int b = static_cast<int>(base.blue  * brightness);
-            r = glm::clamp(r, 0, 255);
-            g = glm::clamp(g, 0, 255);
-            b = glm::clamp(b, 0, 255);
-
-            uint32_t colourValue =
-                (255 << 24) + (r << 16) + (g << 8) + b;
+            // Get the original triangle to access texture coordinates
+            const ModelTriangle &originalTri = modelTriangles[hit.triangleIndex];
+            
+            // Check if triangle has texture coordinates
+            bool hasTexture = originalTri.texturePoints[0].x >= 0 && !originalTri.colour.name.empty();
+            const TextureMap *texture = nullptr;
+            if (hasTexture) {
+                auto it = materialToTexture.find(originalTri.colour.name);
+                if (it != materialToTexture.end() && !it->second.empty()) {
+                    auto texIt = textureMaps.find(it->second);
+                    if (texIt != textureMaps.end()) {
+                        texture = &texIt->second;
+                    }
+                }
+            }
+            
+            uint32_t colourValue;
+            if (texture != nullptr && hasTexture) {
+                // Calculate barycentric coordinates for texture interpolation
+                // We need to recalculate them from the intersection
+                glm::vec3 v0 = rotateVertexAroundPoint(originalTri.vertices[0], sceneCenter, sceneRotationY);
+                glm::vec3 v1 = rotateVertexAroundPoint(originalTri.vertices[1], sceneCenter, sceneRotationY);
+                glm::vec3 v2 = rotateVertexAroundPoint(originalTri.vertices[2], sceneCenter, sceneRotationY);
+                
+                glm::vec3 e0 = v1 - v0;
+                glm::vec3 e1 = v2 - v0;
+                glm::vec3 SPVector = hit.intersectionPoint - v0;
+                glm::vec3 d = glm::normalize(generateRayDirection(x, y));
+                glm::mat3 DEMatrix(-d, e0, e1);
+                glm::vec3 bary = glm::inverse(DEMatrix) * SPVector;
+                float u = bary.y;
+                float v = bary.z;
+                float w = 1.0f - u - v;
+                
+                // Interpolate texture coordinates
+                float texU = w * originalTri.texturePoints[0].x + u * originalTri.texturePoints[1].x + v * originalTri.texturePoints[2].x;
+                float texV = w * originalTri.texturePoints[0].y + u * originalTri.texturePoints[1].y + v * originalTri.texturePoints[2].y;
+                
+                // Sample texture
+                uint32_t texColour = sampleTexture(*texture, texU, texV);
+                
+                // Apply brightness (shadow)
+                float brightness = inShadow ? ambient : 1.0f;
+                int r = ((texColour >> 16) & 0xFF) * brightness;
+                int g = ((texColour >> 8) & 0xFF) * brightness;
+                int b = (texColour & 0xFF) * brightness;
+                r = glm::clamp(r, 0, 255);
+                g = glm::clamp(g, 0, 255);
+                b = glm::clamp(b, 0, 255);
+                colourValue = (255 << 24) + (r << 16) + (g << 8) + b;
+            } else {
+                // Use base colour
+                Colour base = hit.intersectedTriangle.colour;
+                float brightness = inShadow ? ambient : 1.0f;
+                int r = static_cast<int>(base.red   * brightness);
+                int g = static_cast<int>(base.green * brightness);
+                int b = static_cast<int>(base.blue  * brightness);
+                r = glm::clamp(r, 0, 255);
+                g = glm::clamp(g, 0, 255);
+                b = glm::clamp(b, 0, 255);
+                colourValue = (255 << 24) + (r << 16) + (g << 8) + b;
+            }
+            
             window.setPixelColour(x, y, colourValue);
         }
     }
