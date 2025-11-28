@@ -4,6 +4,7 @@
 #include <CanvasPoint.h>
 #include <Colour.h>
 #include <ModelTriangle.h>
+#include <RayTriangleIntersection.h>
 
 #include <fstream>
 #include <vector>
@@ -19,28 +20,23 @@
 #define WIDTH 640
 #define HEIGHT 480
 
-// 全局数据
 std::vector<ModelTriangle> modelTriangles;
-// 深度缓冲：初始化为 -∞，表示“还没被任何东西画过”
 std::vector<float> depthBuffer(WIDTH * HEIGHT, -std::numeric_limits<float>::infinity());
 
 enum RenderMode {
     WIREFRAME = 0,
-    RASTERIZED = 1
+    RASTERIZED = 1,
+    RAYTRACED_SHADOW = 2
 };
 
 RenderMode renderMode = RASTERIZED;
 
 glm::vec3 cameraPosition(0.0f, 0.0f, 4.0f);
-float focalLength = 2.0f;
+float focalLength = 3.5f;
 
-// 场景旋转相关
-float sceneRotationY = 0.0f;  // 整个场景绕y轴的旋转角度（弧度）
-glm::vec3 sceneCenter(0.0f, 0.0f, 0.0f);  // 场景旋转中心点（原点）
-
-// ----------------- 工具函数 -----------------
-
-// 创建绕y轴旋转的矩阵
+float sceneRotationY = 0.0f;
+glm::vec3 sceneCenter(0.0f, 0.0f, 0.0f);
+glm::vec3 lightPosition(0.0f, 0.9f, 0.0f);
 glm::mat3 rotateY(float angle) {
     float c = cos(angle);
     float s = sin(angle);
@@ -51,7 +47,6 @@ glm::mat3 rotateY(float angle) {
     );
 }
 
-// 将顶点绕指定中心点旋转
 glm::vec3 rotateVertexAroundPoint(const glm::vec3& vertex, const glm::vec3& center, float angleY) {
     glm::vec3 relativePos = vertex - center;
     glm::mat3 rotationMatrix = rotateY(angleY);
@@ -98,11 +93,27 @@ void drawLine(DrawingWindow &window, CanvasPoint from, CanvasPoint to, Colour co
 
 std::map<std::string, Colour> loadMTLFile(const std::string &filename) {
     std::map<std::string, Colour> materials;
-    std::ifstream file(filename);
+    std::ifstream file;
     std::string line;
     std::string currentMaterial;
 
-    if (!file.is_open()) {
+    std::vector<std::string> paths = {
+        filename,
+        "../" + filename,
+        "../../" + filename,
+        "./" + filename
+    };
+
+    bool opened = false;
+    for (const auto &path : paths) {
+        file.open(path);
+        if (file.is_open()) {
+            opened = true;
+            break;
+        }
+    }
+
+    if (!opened) {
         std::cerr << "Failed to open MTL: " << filename << std::endl;
         return materials;
     }
@@ -138,10 +149,26 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
     std::map<std::string, Colour> materials = loadMTLFile(mtlPath);
     Colour currentColour(255, 255, 255);
 
-    std::ifstream file(filename);
+    std::ifstream file;
     std::string line;
 
-    if (!file.is_open()) {
+    std::vector<std::string> paths = {
+        filename,
+        "../" + filename,
+        "../../" + filename,
+        "./" + filename
+    };
+
+    bool opened = false;
+    for (const auto &path : paths) {
+        file.open(path);
+        if (file.is_open()) {
+            opened = true;
+            break;
+        }
+    }
+
+    if (!opened) {
         std::cerr << "Failed to open OBJ: " << filename << std::endl;
         return triangles;
     }
@@ -207,19 +234,16 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
     return triangles;
 }
 
-// 把 3D 顶点投影到屏幕坐标
 CanvasPoint projectVertexOntoCanvasPoint(glm::vec3 cameraPosition, float focalLength, glm::vec3 vertexPosition) {
     float x = vertexPosition.x - cameraPosition.x;
     float y = vertexPosition.y - cameraPosition.y;
     float z = cameraPosition.z - vertexPosition.z;
 
-    // 简单 near-plane，防止除 0 和 depth 过大
     if (z < 0.1f) z = 0.1f;
 
     float u = focalLength * (x / z) * 160.0f + WIDTH * 0.5f;
     float v = HEIGHT - (focalLength * (y / z) * 160.0f + HEIGHT * 0.5f);
-
-    float depth = 1.0f / z;  // z 越近，depth 越大
+    float depth = 1.0f / z;
 
     return CanvasPoint(u, v, depth);
 }
@@ -230,11 +254,9 @@ void drawStrokedTriangle(DrawingWindow &window, const CanvasTriangle &triangle, 
     drawLine(window, triangle[2], triangle[0], colour);
 }
 
-// 计算重心坐标的工具函数
 glm::vec3 computeBarycentric(const CanvasPoint &a, const CanvasPoint &b, const CanvasPoint &c, float px, float py) {
     float denom = ((b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y));
     if (std::abs(denom) < 1e-6f) {
-        // 退化三角形
         return glm::vec3(-1.0f, -1.0f, -1.0f);
     }
 
@@ -245,7 +267,6 @@ glm::vec3 computeBarycentric(const CanvasPoint &a, const CanvasPoint &b, const C
     return glm::vec3(w0, w1, w2);
 }
 
-// 使用重心坐标 + Z-buffer 填充三角形（修复毛刺）
 void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, const Colour &colour) {
     CanvasPoint p0 = triangle[0];
     CanvasPoint p1 = triangle[1];
@@ -253,7 +274,6 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
 
     uint32_t fillColour = (255 << 24) + (colour.red << 16) + (colour.green << 8) + colour.blue;
 
-    // 计算包围盒
     float minXf = std::min({ p0.x, p1.x, p2.x });
     float maxXf = std::max({ p0.x, p1.x, p2.x });
     float minYf = std::min({ p0.y, p1.y, p2.y });
@@ -264,20 +284,17 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
     int minY = std::max(0, static_cast<int>(std::floor(minYf)));
     int maxY = std::min(static_cast<int>(window.height) - 1, static_cast<int>(std::ceil(maxYf)));
 
-    // 防止越界
     if (minX > maxX || minY > maxY) return;
 
     for (int y = minY; y <= maxY; ++y) {
         for (int x = minX; x <= maxX; ++x) {
-            // 用像素中心 (x+0.5, y+0.5) 计算
             float px = x + 0.5f;
             float py = y + 0.5f;
 
             glm::vec3 bary = computeBarycentric(p0, p1, p2, px, py);
-            const float eps = -1e-4f; // 允许一点点负数误差
+            const float eps = -1e-4f;
 
             if (bary.x >= eps && bary.y >= eps && bary.z >= eps) {
-                // 插值深度
                 float depth = bary.x * p0.depth + bary.y * p1.depth + bary.z * p2.depth;
 
                 int pixelIndex = y * window.width + x;
@@ -294,7 +311,6 @@ void drawWireframe(DrawingWindow &window) {
     Colour white(255, 255, 255);
 
     for (const auto &modelTriangle : modelTriangles) {
-        // 对所有三角形应用场景旋转
         glm::vec3 v0 = rotateVertexAroundPoint(modelTriangle.vertices[0], sceneCenter, sceneRotationY);
         glm::vec3 v1 = rotateVertexAroundPoint(modelTriangle.vertices[1], sceneCenter, sceneRotationY);
         glm::vec3 v2 = rotateVertexAroundPoint(modelTriangle.vertices[2], sceneCenter, sceneRotationY);
@@ -304,14 +320,12 @@ void drawWireframe(DrawingWindow &window) {
         CanvasPoint p2 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v2);
 
         CanvasTriangle canvasTriangle(p0, p1, p2);
-
         drawStrokedTriangle(window, canvasTriangle, white);
     }
 }
 
 void drawRasterized(DrawingWindow &window) {
     for (const auto &modelTriangle : modelTriangles) {
-        // 对所有三角形应用场景旋转
         glm::vec3 v0 = rotateVertexAroundPoint(modelTriangle.vertices[0], sceneCenter, sceneRotationY);
         glm::vec3 v1 = rotateVertexAroundPoint(modelTriangle.vertices[1], sceneCenter, sceneRotationY);
         glm::vec3 v2 = rotateVertexAroundPoint(modelTriangle.vertices[2], sceneCenter, sceneRotationY);
@@ -321,7 +335,6 @@ void drawRasterized(DrawingWindow &window) {
         CanvasPoint p2 = projectVertexOntoCanvasPoint(cameraPosition, focalLength, v2);
 
         CanvasTriangle canvasTriangle(p0, p1, p2);
-
         drawFilledTriangle(window, canvasTriangle, modelTriangle.colour);
     }
 }
@@ -330,13 +343,135 @@ void clearDepthBuffer() {
     std::fill(depthBuffer.begin(), depthBuffer.end(), -std::numeric_limits<float>::infinity());
 }
 
+glm::vec3 generateRayDirection(int pixelX, int pixelY) {
+    float scale = 160.0f;
+
+    float x = (pixelX + 0.5f - WIDTH * 0.5f) / scale;
+    float y = -(pixelY + 0.5f - HEIGHT * 0.5f) / scale;
+
+    glm::vec3 dir(x, y, -focalLength);
+    return glm::normalize(dir);
+}
+
+RayTriangleIntersection getClosestValidIntersection(const glm::vec3 &origin,
+                                                    const glm::vec3 &rayDirection,
+                                                    int excludeIndex = -1) {
+    RayTriangleIntersection closest;
+    closest.distanceFromCamera = std::numeric_limits<float>::infinity();
+    closest.triangleIndex = -1;
+
+    glm::vec3 d = glm::normalize(rayDirection);
+
+    for (size_t i = 0; i < modelTriangles.size(); i++) {
+        if (excludeIndex >= 0 && static_cast<int>(i) == excludeIndex) {
+            continue;
+        }
+        const ModelTriangle &tri = modelTriangles[i];
+
+        glm::vec3 v0 = rotateVertexAroundPoint(tri.vertices[0], sceneCenter, sceneRotationY);
+        glm::vec3 v1 = rotateVertexAroundPoint(tri.vertices[1], sceneCenter, sceneRotationY);
+        glm::vec3 v2 = rotateVertexAroundPoint(tri.vertices[2], sceneCenter, sceneRotationY);
+
+        glm::vec3 e0 = v1 - v0;
+        glm::vec3 e1 = v2 - v0;
+        glm::vec3 SPVector = origin - v0;
+
+        glm::mat3 DEMatrix(-d, e0, e1);
+        float det = glm::determinant(DEMatrix);
+        if (std::abs(det) < 0.0001f) continue;
+
+        glm::vec3 possibleSolution = glm::inverse(DEMatrix) * SPVector;
+        float t = possibleSolution.x;
+        float u = possibleSolution.y;
+        float v = possibleSolution.z;
+
+        if (t > 0.001f &&
+            u >= 0.0f && u <= 1.0f &&
+            v >= 0.0f && v <= 1.0f &&
+            (u + v) <= 1.0f) {
+
+            if (t < closest.distanceFromCamera) {
+                glm::vec3 intersectionPoint = origin + t * d;
+
+                ModelTriangle rotatedTri = tri;
+                rotatedTri.vertices[0] = v0;
+                rotatedTri.vertices[1] = v1;
+                rotatedTri.vertices[2] = v2;
+                glm::vec3 n = glm::normalize(glm::cross(e1, e0));
+                rotatedTri.normal = n;
+
+                closest = RayTriangleIntersection(intersectionPoint, t, rotatedTri, i);
+            }
+        }
+    }
+
+    return closest;
+}
+
+void drawRayTracedHardShadow(DrawingWindow &window) {
+    float ambient = 0.3f;
+
+    for (int y = 0; y < window.height; ++y) {
+        for (int x = 0; x < window.width; ++x) {
+            glm::vec3 rayDir = generateRayDirection(x, y);
+            RayTriangleIntersection hit = getClosestValidIntersection(cameraPosition, rayDir);
+
+            if (hit.triangleIndex == -1) {
+                continue;
+            }
+
+            glm::vec3 hitPoint = hit.intersectionPoint;
+            glm::vec3 toLight = lightPosition - hitPoint;
+
+            float distanceToLight = glm::length(toLight);
+            if (distanceToLight < 0.001f) distanceToLight = 0.001f;
+
+            glm::vec3 lightDir = glm::normalize(toLight);
+
+            glm::vec3 shadowOrigin = hitPoint;
+            glm::vec3 n = hit.intersectedTriangle.normal;
+            if (glm::length(n) > 0.0f) {
+                n = glm::normalize(n);
+                shadowOrigin += n * 0.0001f;
+            } else {
+                shadowOrigin += lightDir * 0.0001f;
+            }
+
+            RayTriangleIntersection shadowHit =
+                getClosestValidIntersection(shadowOrigin, lightDir, static_cast<int>(hit.triangleIndex));
+
+            bool inShadow = false;
+            if (shadowHit.triangleIndex != -1 &&
+                shadowHit.distanceFromCamera < distanceToLight) {
+                inShadow = true;
+            }
+
+            Colour base = hit.intersectedTriangle.colour;
+            float brightness = inShadow ? ambient : 1.0f;
+
+            int r = static_cast<int>(base.red   * brightness);
+            int g = static_cast<int>(base.green * brightness);
+            int b = static_cast<int>(base.blue  * brightness);
+            r = glm::clamp(r, 0, 255);
+            g = glm::clamp(g, 0, 255);
+            b = glm::clamp(b, 0, 255);
+
+            uint32_t colourValue =
+                (255 << 24) + (r << 16) + (g << 8) + b;
+            window.setPixelColour(x, y, colourValue);
+        }
+    }
+}
+
 void draw(DrawingWindow &window) {
     window.clearPixels();
     clearDepthBuffer();
     if (renderMode == WIREFRAME) {
         drawWireframe(window);
-    } else {
+    } else if (renderMode == RASTERIZED) {
         drawRasterized(window);
+    } else if (renderMode == RAYTRACED_SHADOW) {
+        drawRayTracedHardShadow(window);
     }
 }
 
@@ -350,6 +485,10 @@ bool handleEvent(SDL_Event event, DrawingWindow &window) {
             renderMode = RASTERIZED;
             return true;
         }
+        else if (event.key.keysym.sym == SDLK_3) {
+            renderMode = RAYTRACED_SHADOW;
+            return true;
+        }
     }
     else if (event.type == SDL_MOUSEBUTTONDOWN) {
         window.savePPM("output.ppm");
@@ -360,8 +499,8 @@ bool handleEvent(SDL_Event event, DrawingWindow &window) {
 
 bool updateCamera(float deltaTime) {
     const Uint8 *keyState = SDL_GetKeyboardState(NULL);
-    const float cameraSpeed = 2.0f * deltaTime; // 每秒2个单位
-    const float rotationSpeed = 2.0f * deltaTime; // 每秒2弧度
+    const float cameraSpeed = 2.0f * deltaTime;
+    const float rotationSpeed = 2.0f * deltaTime;
     bool cameraMoved = false;
     bool objectRotated = false;
 
@@ -389,8 +528,6 @@ bool updateCamera(float deltaTime) {
         cameraPosition.z += cameraSpeed;
         cameraMoved = true;
     }
-    
-    // 处理场景旋转：a键逆时针，d键顺时针
     if (keyState[SDL_SCANCODE_A]) {
         sceneRotationY += rotationSpeed;
         objectRotated = true;
@@ -427,14 +564,13 @@ int main(int argc, char *argv[]) {
     Uint32 lastFrameTime = SDL_GetTicks();
     const float targetFPS = 60.0f;
     const float frameTime = 1000.0f / targetFPS;
-    const float maxDeltaTime = 1.0f / 30.0f; // 限制最大deltaTime为30FPS
+    const float maxDeltaTime = 1.0f / 30.0f;
 
     while (true) {
         Uint32 currentTime = SDL_GetTicks();
         float deltaTime = (currentTime - lastFrameTime) / 1000.0f;
-        deltaTime = std::min(deltaTime, maxDeltaTime); // 限制最大deltaTime
+        deltaTime = std::min(deltaTime, maxDeltaTime);
 
-        // 处理窗口事件
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
@@ -446,14 +582,10 @@ int main(int argc, char *argv[]) {
             handleEvent(event, window);
         }
 
-        // 更新相机位置（基于键盘状态）
         updateCamera(deltaTime);
-
-        // 每帧都渲染
         draw(window);
         window.renderFrame();
 
-        // 帧率控制
         Uint32 elapsed = SDL_GetTicks() - currentTime;
         if (elapsed < frameTime) {
             SDL_Delay(static_cast<Uint32>(frameTime - elapsed));
