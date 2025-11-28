@@ -30,7 +30,8 @@ std::map<std::string, std::string> materialToTexture;
 enum RenderMode {
     WIREFRAME = 0,
     RASTERIZED = 1,
-    RAYTRACED_SHADOW = 2
+    RAYTRACED_SHADOW = 2,
+    RAYTRACED_DIFFUSE = 3   // 模式4：漫反射（距离+入射角）
 };
 
 RenderMode renderMode = RASTERIZED;
@@ -41,6 +42,7 @@ float focalLength = 3.5f;
 float sceneRotationY = 0.0f;
 glm::vec3 sceneCenter(0.0f, 0.0f, 0.0f);
 glm::vec3 lightPosition(0.0f, 0.9f, 0.0f);
+
 glm::mat3 rotateY(float angle) {
     float c = cos(angle);
     float s = sin(angle);
@@ -509,7 +511,7 @@ RayTriangleIntersection getClosestValidIntersection(const glm::vec3 &origin,
                 rotatedTri.vertices[0] = v0;
                 rotatedTri.vertices[1] = v1;
                 rotatedTri.vertices[2] = v2;
-                glm::vec3 n = glm::normalize(glm::cross(e1, e0));
+                glm::vec3 n = glm::normalize(glm::cross(e0, e1));
                 rotatedTri.normal = n;
 
                 closest = RayTriangleIntersection(intersectionPoint, t, rotatedTri, i);
@@ -626,6 +628,115 @@ void drawRayTracedHardShadow(DrawingWindow &window) {
     }
 }
 
+// =================== 模式4：Proximity + Angle of Incidence 漫反射 ===================
+void drawRayTracedDiffuse(DrawingWindow &window) {
+    const float ambient = 0.2f;        // 环境光稍微亮一点
+    const float lightPower = 15.0f;  // 增加光强，使漫反射可见
+    const float PI = 3.14159265f;
+
+    for (int y = 0; y < window.height; ++y) {
+        for (int x = 0; x < window.width; ++x) {
+            glm::vec3 rayDir = generateRayDirection(x, y);
+            RayTriangleIntersection hit = getClosestValidIntersection(cameraPosition, rayDir);
+
+            if (hit.triangleIndex == -1) continue;
+
+            glm::vec3 hitPoint = hit.intersectionPoint;
+
+            // ---------- Proximity: 1 / (4πr^2) ----------
+            glm::vec3 toLight = lightPosition - hitPoint;
+            float distanceToLight = glm::length(toLight);
+            if (distanceToLight < 0.001f) distanceToLight = 0.001f;
+            float distance2 = distanceToLight * distanceToLight;
+            glm::vec3 lightDir = glm::normalize(toLight);
+
+            float proximity = lightPower / (4.0f * PI * distance2);
+            // 确保 proximity 不会太小，但也不要超过合理范围
+            proximity = std::min(proximity, 2.0f);  // 限制最大 proximity，防止过亮
+
+            // ---------- Angle of incidence: n ⋅ l ----------
+            glm::vec3 n = hit.intersectedTriangle.normal;
+            if (glm::length(n) > 0.0f) n = glm::normalize(n);
+
+            // 关键：让法线朝向相机（-rayDir）
+            if (glm::dot(n, -rayDir) < 0.0f) {
+                n = -n;
+            }
+
+            // 点积 = cos(theta)，决定"迎光程度"
+            float angleTerm = glm::dot(n, lightDir);
+            if (angleTerm < 0.0f) angleTerm = 0.0f;
+
+            // 合成亮度：环境光 + 距离衰减 * 入射角
+            float brightness = ambient + proximity * angleTerm;
+            brightness = glm::clamp(brightness, 0.0f, 1.0f);
+
+
+            const ModelTriangle &originalTri = modelTriangles[hit.triangleIndex];
+
+            bool hasTexture = originalTri.texturePoints[0].x >= 0 && !originalTri.colour.name.empty();
+            const TextureMap *texture = nullptr;
+            if (hasTexture) {
+                auto it = materialToTexture.find(originalTri.colour.name);
+                if (it != materialToTexture.end() && !it->second.empty()) {
+                    auto texIt = textureMaps.find(it->second);
+                    if (texIt != textureMaps.end()) {
+                        texture = &texIt->second;
+                    }
+                }
+            }
+
+            uint32_t colourValue;
+
+            if (texture != nullptr && hasTexture) {
+                // 计算重心坐标 → 插值纹理坐标
+                glm::vec3 v0 = rotateVertexAroundPoint(originalTri.vertices[0], sceneCenter, sceneRotationY);
+                glm::vec3 v1 = rotateVertexAroundPoint(originalTri.vertices[1], sceneCenter, sceneRotationY);
+                glm::vec3 v2 = rotateVertexAroundPoint(originalTri.vertices[2], sceneCenter, sceneRotationY);
+
+                glm::vec3 e0 = v1 - v0;
+                glm::vec3 e1 = v2 - v0;
+                glm::vec3 SPVector = hit.intersectionPoint - v0;
+                glm::vec3 d = glm::normalize(rayDir);
+                glm::mat3 DEMatrix(-d, e0, e1);
+                glm::vec3 bary = glm::inverse(DEMatrix) * SPVector;
+
+                float u = bary.y;
+                float v = bary.z;
+                float w = 1.0f - u - v;
+
+                float texU = w * originalTri.texturePoints[0].x + u * originalTri.texturePoints[1].x +
+                             v * originalTri.texturePoints[2].x;
+                float texV = w * originalTri.texturePoints[0].y + u * originalTri.texturePoints[1].y +
+                             v * originalTri.texturePoints[2].y;
+
+                uint32_t texColour = sampleTexture(*texture, texU, texV);
+
+                int r = static_cast<int>(((texColour >> 16) & 0xFF) * brightness);
+                int g = static_cast<int>(((texColour >> 8)  & 0xFF) * brightness);
+                int b = static_cast<int>(((texColour      ) & 0xFF) * brightness);
+
+                r = glm::clamp(r, 0, 255);
+                g = glm::clamp(g, 0, 255);
+                b = glm::clamp(b, 0, 255);
+                colourValue = (255 << 24) + (r << 16) + (g << 8) + b;
+            } else {
+                Colour base = hit.intersectedTriangle.colour;
+                int r = static_cast<int>(base.red   * brightness);
+                int g = static_cast<int>(base.green * brightness);
+                int b = static_cast<int>(base.blue  * brightness);
+
+                r = glm::clamp(r, 0, 255);
+                g = glm::clamp(g, 0, 255);
+                b = glm::clamp(b, 0, 255);
+                colourValue = (255 << 24) + (r << 16) + (g << 8) + b;
+            }
+
+            window.setPixelColour(x, y, colourValue);
+        }
+    }
+}
+
 void draw(DrawingWindow &window) {
     window.clearPixels();
     clearDepthBuffer();
@@ -635,6 +746,8 @@ void draw(DrawingWindow &window) {
         drawRasterized(window);
     } else if (renderMode == RAYTRACED_SHADOW) {
         drawRayTracedHardShadow(window);
+    } else if (renderMode == RAYTRACED_DIFFUSE) {
+        drawRayTracedDiffuse(window);
     }
 }
 
@@ -650,6 +763,10 @@ bool handleEvent(SDL_Event event, DrawingWindow &window) {
         }
         else if (event.key.keysym.sym == SDLK_3) {
             renderMode = RAYTRACED_SHADOW;
+            return true;
+        }
+        else if (event.key.keysym.sym == SDLK_4) {
+            renderMode = RAYTRACED_DIFFUSE;   // 新增：模式4
             return true;
         }
     }
