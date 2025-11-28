@@ -41,7 +41,7 @@ float focalLength = 3.5f;
 
 float sceneRotationY = 0.0f;
 glm::vec3 sceneCenter(0.0f, 0.0f, 0.0f);
-glm::vec3 lightPosition(0.0f, 0.9f, 0.0f);
+glm::vec3 lightPosition(0.0f, 0.75f, 0.2f);  // 调整位置以改善蓝色长方体的漫反射效果
 
 glm::mat3 rotateY(float angle) {
     float c = cos(angle);
@@ -631,7 +631,7 @@ void drawRayTracedHardShadow(DrawingWindow &window) {
 // =================== 模式4：Proximity + Angle of Incidence 漫反射 ===================
 void drawRayTracedDiffuse(DrawingWindow &window) {
     const float ambient = 0.2f;        // 环境光稍微亮一点
-    const float lightPower = 15.0f;  // 增加光强，使漫反射可见
+    const float lightPower = 12.0f;  // 增加光强，使漫反射可见
     const float PI = 3.14159265f;
 
     for (int y = 0; y < window.height; ++y) {
