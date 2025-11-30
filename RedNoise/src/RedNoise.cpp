@@ -31,7 +31,7 @@ enum RenderMode {
     WIREFRAME = 0,
     RASTERIZED = 1,
     RAYTRACED_SHADOW = 2,
-    RAYTRACED_DIFFUSE = 3   // 模式4：漫反射（距离+入射角）
+    RAYTRACED_DIFFUSE = 3
 };
 
 RenderMode renderMode = RASTERIZED;
@@ -40,8 +40,10 @@ glm::vec3 cameraPosition(0.0f, 0.0f, 4.0f);
 float focalLength = 3.5f;
 
 float sceneRotationY = 0.0f;
+bool autoRotate = false;
+float autoRotateSpeed = 1.0f;
 glm::vec3 sceneCenter(0.0f, 0.0f, 0.0f);
-glm::vec3 lightPosition(0.0f, 0.75f, 0.2f);  // 调整位置以改善蓝色长方体的漫反射效果
+glm::vec3 lightPosition(0.0f, 0.75f, 0.2f);
 
 glm::mat3 rotateY(float angle) {
     float c = cos(angle);
@@ -212,7 +214,6 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
                 currentMaterial = materials[materialName];
                 if (!currentMaterial.textureFilename.empty()) {
                     materialToTexture[materialName] = currentMaterial.textureFilename;
-                    // Load texture if not already loaded
                     if (textureMaps.find(currentMaterial.textureFilename) == textureMaps.end()) {
                         std::vector<std::string> paths = {
                             currentMaterial.textureFilename, "../" + currentMaterial.textureFilename,
@@ -274,7 +275,6 @@ std::vector<ModelTriangle> loadOBJFile(const std::string &filename, const std::s
                         currentMaterial.colour
                     );
                     
-                    // Set texture coordinates if available
                     if (textureIndices[0] >= 0 && textureIndices[0] < static_cast<int>(textureCoords.size())) {
                         triangle.texturePoints[0] = textureCoords[textureIndices[0]];
                     }
@@ -331,17 +331,14 @@ glm::vec3 computeBarycentric(const CanvasPoint &a, const CanvasPoint &b, const C
 }
 
 uint32_t sampleTexture(const TextureMap &texture, float u, float v) {
-    // Clamp texture coordinates to [0, 1]
     if (u < 0.0f) u = 0.0f;
     if (u > 1.0f) u = 1.0f;
     if (v < 0.0f) v = 0.0f;
     if (v > 1.0f) v = 1.0f;
     
-    // Convert to texture coordinates (flip V coordinate)
     int texX = static_cast<int>(u * texture.width);
     int texY = static_cast<int>((1.0f - v) * texture.height);
     
-    // Clamp to valid range
     if (texX < 0) texX = 0;
     if (texX >= static_cast<int>(texture.width)) texX = texture.width - 1;
     if (texY < 0) texY = 0;
@@ -394,7 +391,6 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
                     depthBuffer[pixelIndex] = depth;
                     
                     if (hasTexture) {
-                        // Interpolate texture coordinates
                         float texU = bary.x * p0.texturePoint.x + bary.y * p1.texturePoint.x + bary.z * p2.texturePoint.x;
                         float texV = bary.x * p0.texturePoint.y + bary.y * p1.texturePoint.y + bary.z * p2.texturePoint.y;
                         uint32_t texColour = sampleTexture(*texture, texU, texV);
@@ -437,7 +433,6 @@ void drawRasterized(DrawingWindow &window) {
 
         CanvasTriangle canvasTriangle(p0, p1, p2);
         
-        // Use texture if triangle has texture coordinates and material has texture
         const TextureMap *texture = nullptr;
         if (modelTriangle.texturePoints[0].x >= 0 && !modelTriangle.colour.name.empty()) {
             auto it = materialToTexture.find(modelTriangle.colour.name);
@@ -560,10 +555,8 @@ void drawRayTracedHardShadow(DrawingWindow &window) {
                 inShadow = true;
             }
 
-            // Get the original triangle to access texture coordinates
             const ModelTriangle &originalTri = modelTriangles[hit.triangleIndex];
             
-            // Check if triangle has texture coordinates
             bool hasTexture = originalTri.texturePoints[0].x >= 0 && !originalTri.colour.name.empty();
             const TextureMap *texture = nullptr;
             if (hasTexture) {
@@ -578,8 +571,6 @@ void drawRayTracedHardShadow(DrawingWindow &window) {
             
             uint32_t colourValue;
             if (texture != nullptr && hasTexture) {
-                // Calculate barycentric coordinates for texture interpolation
-                // We need to recalculate them from the intersection
                 glm::vec3 v0 = rotateVertexAroundPoint(originalTri.vertices[0], sceneCenter, sceneRotationY);
                 glm::vec3 v1 = rotateVertexAroundPoint(originalTri.vertices[1], sceneCenter, sceneRotationY);
                 glm::vec3 v2 = rotateVertexAroundPoint(originalTri.vertices[2], sceneCenter, sceneRotationY);
@@ -594,14 +585,11 @@ void drawRayTracedHardShadow(DrawingWindow &window) {
                 float v = bary.z;
                 float w = 1.0f - u - v;
                 
-                // Interpolate texture coordinates
                 float texU = w * originalTri.texturePoints[0].x + u * originalTri.texturePoints[1].x + v * originalTri.texturePoints[2].x;
                 float texV = w * originalTri.texturePoints[0].y + u * originalTri.texturePoints[1].y + v * originalTri.texturePoints[2].y;
                 
-                // Sample texture
                 uint32_t texColour = sampleTexture(*texture, texU, texV);
                 
-                // Apply brightness (shadow)
                 float brightness = inShadow ? ambient : 1.0f;
                 int r = ((texColour >> 16) & 0xFF) * brightness;
                 int g = ((texColour >> 8) & 0xFF) * brightness;
@@ -611,7 +599,6 @@ void drawRayTracedHardShadow(DrawingWindow &window) {
                 b = glm::clamp(b, 0, 255);
                 colourValue = (255 << 24) + (r << 16) + (g << 8) + b;
             } else {
-                // Use base colour
                 Colour base = hit.intersectedTriangle.colour;
                 float brightness = inShadow ? ambient : 1.0f;
                 int r = static_cast<int>(base.red   * brightness);
@@ -628,10 +615,9 @@ void drawRayTracedHardShadow(DrawingWindow &window) {
     }
 }
 
-// =================== 模式4：Proximity + Angle of Incidence 漫反射 ===================
 void drawRayTracedDiffuse(DrawingWindow &window) {
-    const float ambient = 0.2f;        // 环境光稍微亮一点
-    const float lightPower = 12.0f;  // 增加光强，使漫反射可见
+    const float ambient = 0.2f;
+    const float lightPower = 12.0f;
     const float PI = 3.14159265f;
 
     for (int y = 0; y < window.height; ++y) {
@@ -643,7 +629,6 @@ void drawRayTracedDiffuse(DrawingWindow &window) {
 
             glm::vec3 hitPoint = hit.intersectionPoint;
 
-            // ---------- Proximity: 1 / (4πr^2) ----------
             glm::vec3 toLight = lightPosition - hitPoint;
             float distanceToLight = glm::length(toLight);
             if (distanceToLight < 0.001f) distanceToLight = 0.001f;
@@ -651,23 +636,17 @@ void drawRayTracedDiffuse(DrawingWindow &window) {
             glm::vec3 lightDir = glm::normalize(toLight);
 
             float proximity = lightPower / (4.0f * PI * distance2);
-            // 确保 proximity 不会太小，但也不要超过合理范围
-            proximity = std::min(proximity, 2.0f);  // 限制最大 proximity，防止过亮
-
-            // ---------- Angle of incidence: n ⋅ l ----------
+            proximity = std::min(proximity, 2.0f);
             glm::vec3 n = hit.intersectedTriangle.normal;
             if (glm::length(n) > 0.0f) n = glm::normalize(n);
 
-            // 关键：让法线朝向相机（-rayDir）
             if (glm::dot(n, -rayDir) < 0.0f) {
                 n = -n;
             }
 
-            // 点积 = cos(theta)，决定"迎光程度"
             float angleTerm = glm::dot(n, lightDir);
             if (angleTerm < 0.0f) angleTerm = 0.0f;
 
-            // 合成亮度：环境光 + 距离衰减 * 入射角
             float brightness = ambient + proximity * angleTerm;
             brightness = glm::clamp(brightness, 0.0f, 1.0f);
 
@@ -687,9 +666,7 @@ void drawRayTracedDiffuse(DrawingWindow &window) {
             }
 
             uint32_t colourValue;
-
             if (texture != nullptr && hasTexture) {
-                // 计算重心坐标 → 插值纹理坐标
                 glm::vec3 v0 = rotateVertexAroundPoint(originalTri.vertices[0], sceneCenter, sceneRotationY);
                 glm::vec3 v1 = rotateVertexAroundPoint(originalTri.vertices[1], sceneCenter, sceneRotationY);
                 glm::vec3 v2 = rotateVertexAroundPoint(originalTri.vertices[2], sceneCenter, sceneRotationY);
@@ -766,7 +743,11 @@ bool handleEvent(SDL_Event event, DrawingWindow &window) {
             return true;
         }
         else if (event.key.keysym.sym == SDLK_4) {
-            renderMode = RAYTRACED_DIFFUSE;   // 新增：模式4
+            renderMode = RAYTRACED_DIFFUSE;
+            return true;
+        }
+        else if (event.key.keysym.sym == SDLK_o) {
+            autoRotate = !autoRotate;
             return true;
         }
     }
@@ -777,47 +758,38 @@ bool handleEvent(SDL_Event event, DrawingWindow &window) {
     return false;
 }
 
-bool updateCamera(float deltaTime) {
+void updateCamera(float deltaTime) {
     const Uint8 *keyState = SDL_GetKeyboardState(NULL);
     const float cameraSpeed = 2.0f * deltaTime;
     const float rotationSpeed = 2.0f * deltaTime;
-    bool cameraMoved = false;
-    bool objectRotated = false;
 
     if (keyState[SDL_SCANCODE_LEFT]) {
         cameraPosition.x -= cameraSpeed;
-        cameraMoved = true;
     }
     if (keyState[SDL_SCANCODE_RIGHT]) {
         cameraPosition.x += cameraSpeed;
-        cameraMoved = true;
     }
     if (keyState[SDL_SCANCODE_UP]) {
         cameraPosition.y += cameraSpeed;
-        cameraMoved = true;
     }
     if (keyState[SDL_SCANCODE_DOWN]) {
         cameraPosition.y -= cameraSpeed;
-        cameraMoved = true;
     }
     if (keyState[SDL_SCANCODE_W]) {
         cameraPosition.z -= cameraSpeed;
-        cameraMoved = true;
     }
     if (keyState[SDL_SCANCODE_S]) {
         cameraPosition.z += cameraSpeed;
-        cameraMoved = true;
     }
     if (keyState[SDL_SCANCODE_A]) {
         sceneRotationY += rotationSpeed;
-        objectRotated = true;
     }
     if (keyState[SDL_SCANCODE_D]) {
         sceneRotationY -= rotationSpeed;
-        objectRotated = true;
     }
-
-    return cameraMoved || objectRotated;
+    if (autoRotate) {
+        sceneRotationY += autoRotateSpeed * deltaTime;
+    }
 }
 
 int main(int argc, char *argv[]) {
