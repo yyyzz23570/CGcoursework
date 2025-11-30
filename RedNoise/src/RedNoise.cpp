@@ -31,7 +31,8 @@ enum RenderMode {
     WIREFRAME = 0,
     RASTERIZED = 1,
     RAYTRACED_SHADOW = 2,
-    RAYTRACED_DIFFUSE = 3
+    RAYTRACED_DIFFUSE = 3,
+    RAYTRACED_SPECULAR = 4
 };
 
 RenderMode renderMode = RASTERIZED;
@@ -615,9 +616,9 @@ void drawRayTracedHardShadow(DrawingWindow &window) {
     }
 }
 
-void drawRayTracedDiffuse(DrawingWindow &window) {
+void drawRayTracedDiffuse(DrawingWindow &window, bool enableSpecular = false) {
     const float ambient = 0.2f;
-    const float lightPower = 12.0f;
+    const float lightPower = 15.0f;
     const float PI = 3.14159265f;
 
     for (int y = 0; y < window.height; ++y) {
@@ -647,7 +648,18 @@ void drawRayTracedDiffuse(DrawingWindow &window) {
             float angleTerm = glm::dot(n, lightDir);
             if (angleTerm < 0.0f) angleTerm = 0.0f;
 
-            float brightness = ambient + proximity * angleTerm;
+            float specular = 0.0f;
+            if (enableSpecular && angleTerm > 0.0f) {
+                glm::vec3 viewDir = glm::normalize(cameraPosition - hitPoint);
+                glm::vec3 reflectDir = 2.0f * glm::dot(n, lightDir) * n - lightDir;
+                float specularTerm = glm::dot(reflectDir, viewDir);
+                if (specularTerm > 0.0f) {
+                    float shininess = 32.0f;
+                    specular = pow(specularTerm, shininess) * 0.8f;
+                }
+            }
+
+            float brightness = ambient + proximity * angleTerm + specular;
             brightness = glm::clamp(brightness, 0.0f, 1.0f);
 
 
@@ -714,6 +726,10 @@ void drawRayTracedDiffuse(DrawingWindow &window) {
     }
 }
 
+void drawRayTracedSpecular(DrawingWindow &window) {
+    drawRayTracedDiffuse(window, true);
+}
+
 void draw(DrawingWindow &window) {
     window.clearPixels();
     clearDepthBuffer();
@@ -724,7 +740,9 @@ void draw(DrawingWindow &window) {
     } else if (renderMode == RAYTRACED_SHADOW) {
         drawRayTracedHardShadow(window);
     } else if (renderMode == RAYTRACED_DIFFUSE) {
-        drawRayTracedDiffuse(window);
+        drawRayTracedDiffuse(window, false);
+    } else if (renderMode == RAYTRACED_SPECULAR) {
+        drawRayTracedDiffuse(window, true);
     }
 }
 
@@ -744,6 +762,10 @@ bool handleEvent(SDL_Event event, DrawingWindow &window) {
         }
         else if (event.key.keysym.sym == SDLK_4) {
             renderMode = RAYTRACED_DIFFUSE;
+            return true;
+        }
+        else if (event.key.keysym.sym == SDLK_5) {
+            renderMode = RAYTRACED_SPECULAR;
             return true;
         }
         else if (event.key.keysym.sym == SDLK_o) {
