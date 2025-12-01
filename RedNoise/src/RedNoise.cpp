@@ -319,18 +319,6 @@ void drawStrokedTriangle(DrawingWindow &window, const CanvasTriangle &triangle, 
     drawLine(window, triangle[2], triangle[0], colour);
 }
 
-glm::vec3 computeBarycentric(const CanvasPoint &a, const CanvasPoint &b, const CanvasPoint &c, float px, float py) {
-    float denom = ((b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y));
-    if (std::abs(denom) < 1e-6f) {
-        return glm::vec3(-1.0f, -1.0f, -1.0f);
-    }
-
-    float w0 = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / denom;
-    float w1 = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / denom;
-    float w2 = 1.0f - w0 - w1;
-
-    return glm::vec3(w0, w1, w2);
-}
 
 uint32_t sampleTexture(const TextureMap &texture, float u, float v) {
     if (u < 0.0f) u = 0.0f;
@@ -382,7 +370,14 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
             float px = x + 0.5f;
             float py = y + 0.5f;
 
-            glm::vec3 bary = computeBarycentric(p0, p1, p2, px, py);
+            glm::vec2 v0(p0.x, p0.y);
+            glm::vec2 v1(p1.x, p1.y);
+            glm::vec2 v2(p2.x, p2.y);
+            glm::vec2 r(px, py);
+            glm::vec3 baryResult = convertToBarycentricCoordinates(v0, v1, v2, r);
+            // convertToBarycentricCoordinates returns (u, v, w) where u->v1, v->v2, w->v0
+            // We need (w0, w1, w2) where w0->p0, w1->p1, w2->p2
+            glm::vec3 bary(baryResult.z, baryResult.x, baryResult.y);
             const float eps = -1e-4f;
 
             if (bary.x >= eps && bary.y >= eps && bary.z >= eps) {
