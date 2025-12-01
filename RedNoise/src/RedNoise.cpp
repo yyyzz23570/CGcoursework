@@ -654,8 +654,8 @@ void drawRayTracedDiffuse(DrawingWindow &window, bool enableSpecular = false) {
                 glm::vec3 reflectDir = 2.0f * glm::dot(n, lightDir) * n - lightDir;
                 float specularTerm = glm::dot(reflectDir, viewDir);
                 if (specularTerm > 0.0f) {
-                    float shininess = 32.0f;
-                    specular = pow(specularTerm, shininess) * 0.8f;
+                    float shininess = 10.0f;
+                    specular = pow(specularTerm, shininess) * 2.0f;
                 }
             }
 
