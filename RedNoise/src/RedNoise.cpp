@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <map>
 #include <sstream>
+#include <iomanip>
 #include <glm/glm.hpp>
 #include <limits>
 #include <SDL.h>
@@ -46,6 +47,10 @@ bool autoRotate = false;
 float autoRotateSpeed = 1.0f;
 glm::vec3 sceneCenter(0.0f, 0.0f, 0.0f);
 glm::vec3 lightPosition(0.0f, 0.75f, 0.2f);
+
+bool isRecording = false;
+int frameCounter = 0;
+
 
 glm::mat3 rotateY(float angle) {
     float c = cos(angle);
@@ -375,8 +380,6 @@ void drawFilledTriangle(DrawingWindow &window, const CanvasTriangle &triangle, c
             glm::vec2 v2(p2.x, p2.y);
             glm::vec2 r(px, py);
             glm::vec3 baryResult = convertToBarycentricCoordinates(v0, v1, v2, r);
-            // convertToBarycentricCoordinates returns (u, v, w) where u->v1, v->v2, w->v0
-            // We need (w0, w1, w2) where w0->p0, w1->p1, w2->p2
             glm::vec3 bary(baryResult.z, baryResult.x, baryResult.y);
             const float eps = -1e-4f;
 
@@ -918,6 +921,13 @@ bool handleEvent(SDL_Event event, DrawingWindow &window) {
             autoRotate = !autoRotate;
             return true;
         }
+        else if (event.key.keysym.sym == SDLK_r) {
+            isRecording = !isRecording;
+            if (isRecording) {
+                frameCounter = 0;
+            }
+            return true;
+        }
     }
     else if (event.type == SDL_MOUSEBUTTONDOWN) {
         window.savePPM("output.ppm");
@@ -982,7 +992,7 @@ int main(int argc, char *argv[]) {
     modelTriangles.insert(modelTriangles.end(), sphereTriangles.begin(), sphereTriangles.end());
 
     Uint32 lastFrameTime = SDL_GetTicks();
-    const float targetFPS = 60.0f;
+    const float targetFPS = 30.0f;
     const float frameTime = 1000.0f / targetFPS;
     const float maxDeltaTime = 1.0f / 30.0f;
 
@@ -1005,6 +1015,14 @@ int main(int argc, char *argv[]) {
         updateCamera(deltaTime);
         draw(window);
         window.renderFrame();
+
+
+        if (isRecording) {
+            frameCounter++;
+            std::ostringstream filename;
+            filename << "frame_" << std::setfill('0') << std::setw(4) << frameCounter << ".ppm";
+            window.savePPM(filename.str());
+        }
 
         Uint32 elapsed = SDL_GetTicks() - currentTime;
         if (elapsed < frameTime) {
