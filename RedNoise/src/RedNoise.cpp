@@ -32,7 +32,8 @@ enum RenderMode {
     RASTERIZED = 1,
     RAYTRACED_SHADOW = 2,
     RAYTRACED_DIFFUSE = 3,
-    RAYTRACED_SPECULAR = 4
+    RAYTRACED_SPECULAR = 4,
+    RAYTRACED_SPECULAR_GOURAUD = 5
 };
 
 RenderMode renderMode = RASTERIZED;
@@ -726,8 +727,152 @@ void drawRayTracedDiffuse(DrawingWindow &window, bool enableSpecular = false) {
     }
 }
 
-void drawRayTracedSpecular(DrawingWindow &window) {
-    drawRayTracedDiffuse(window, true);
+glm::vec3 calculateVertexNormal(const glm::vec3 &vertex, const std::vector<ModelTriangle> &triangles) {
+    glm::vec3 normalSum(0.0f);
+    int count = 0;
+    const float epsilon = 0.0001f;
+    
+    for (const auto &tri : triangles) {
+        for (int i = 0; i < 3; i++) {
+            glm::vec3 v = rotateVertexAroundPoint(tri.vertices[i], sceneCenter, sceneRotationY);
+            if (glm::length(v - vertex) < epsilon) {
+                glm::vec3 v0 = rotateVertexAroundPoint(tri.vertices[0], sceneCenter, sceneRotationY);
+                glm::vec3 v1 = rotateVertexAroundPoint(tri.vertices[1], sceneCenter, sceneRotationY);
+                glm::vec3 v2 = rotateVertexAroundPoint(tri.vertices[2], sceneCenter, sceneRotationY);
+                glm::vec3 e0 = v1 - v0;
+                glm::vec3 e1 = v2 - v0;
+                glm::vec3 triNormal = glm::normalize(glm::cross(e0, e1));
+                normalSum += triNormal;
+                count++;
+                break;
+            }
+        }
+    }
+    
+    if (count > 0) {
+        return glm::normalize(normalSum / static_cast<float>(count));
+    }
+    
+    return glm::vec3(0.0f, 1.0f, 0.0f);
+}
+
+float calculateVertexBrightnessWithSpecular(const glm::vec3 &vertex, const glm::vec3 &normal, const glm::vec3 &viewDir) {
+    const float ambient = 0.2f;
+    const float lightPower = 15.0f;
+    const float PI = 3.14159265f;
+    
+    glm::vec3 toLight = lightPosition - vertex;
+    float distanceToLight = glm::length(toLight);
+    if (distanceToLight < 0.001f) distanceToLight = 0.001f;
+    float distance2 = distanceToLight * distanceToLight;
+    glm::vec3 lightDir = glm::normalize(toLight);
+    
+    float proximity = lightPower / (4.0f * PI * distance2);
+    proximity = std::min(proximity, 2.0f);
+    
+    glm::vec3 n = glm::normalize(normal);
+    float angleTerm = glm::dot(n, lightDir);
+    if (angleTerm < 0.0f) angleTerm = 0.0f;
+    
+    float specular = 0.0f;
+    if (angleTerm > 0.0f) {
+        glm::vec3 reflectDir = 2.0f * glm::dot(n, lightDir) * n - lightDir;
+        float specularTerm = glm::dot(reflectDir, viewDir);
+        if (specularTerm > 0.0f) {
+            float shininess = 10.0f;
+            specular = pow(specularTerm, shininess) * 2.0f;
+        }
+    }
+    
+    float brightness = ambient + proximity * angleTerm + specular;
+    return glm::clamp(brightness, 0.0f, 1.0f);
+}
+
+void drawRayTracedSpecularGouraud(DrawingWindow &window) {
+    for (int y = 0; y < window.height; ++y) {
+        for (int x = 0; x < window.width; ++x) {
+            glm::vec3 rayDir = generateRayDirection(x, y);
+            RayTriangleIntersection hit = getClosestValidIntersection(cameraPosition, rayDir);
+
+            if (hit.triangleIndex == -1) continue;
+
+            glm::vec3 hitPoint = hit.intersectionPoint;
+
+            const ModelTriangle &originalTri = modelTriangles[hit.triangleIndex];
+            
+            glm::vec3 v0 = rotateVertexAroundPoint(originalTri.vertices[0], sceneCenter, sceneRotationY);
+            glm::vec3 v1 = rotateVertexAroundPoint(originalTri.vertices[1], sceneCenter, sceneRotationY);
+            glm::vec3 v2 = rotateVertexAroundPoint(originalTri.vertices[2], sceneCenter, sceneRotationY);
+            
+            glm::vec3 n0 = calculateVertexNormal(v0, modelTriangles);
+            glm::vec3 n1 = calculateVertexNormal(v1, modelTriangles);
+            glm::vec3 n2 = calculateVertexNormal(v2, modelTriangles);
+            
+            glm::vec3 viewDir0 = glm::normalize(cameraPosition - v0);
+            glm::vec3 viewDir1 = glm::normalize(cameraPosition - v1);
+            glm::vec3 viewDir2 = glm::normalize(cameraPosition - v2);
+            
+            float brightness0 = calculateVertexBrightnessWithSpecular(v0, n0, viewDir0);
+            float brightness1 = calculateVertexBrightnessWithSpecular(v1, n1, viewDir1);
+            float brightness2 = calculateVertexBrightnessWithSpecular(v2, n2, viewDir2);
+            
+            glm::vec3 e0 = v1 - v0;
+            glm::vec3 e1 = v2 - v0;
+            glm::vec3 SPVector = hitPoint - v0;
+            glm::vec3 d = glm::normalize(rayDir);
+            glm::mat3 DEMatrix(-d, e0, e1);
+            glm::vec3 bary = glm::inverse(DEMatrix) * SPVector;
+            
+            float u = bary.y;
+            float v = bary.z;
+            float w = 1.0f - u - v;
+            
+            float interpolatedBrightness = w * brightness0 + u * brightness1 + v * brightness2;
+
+            bool hasTexture = originalTri.texturePoints[0].x >= 0 && !originalTri.colour.name.empty();
+            const TextureMap *texture = nullptr;
+            if (hasTexture) {
+                auto it = materialToTexture.find(originalTri.colour.name);
+                if (it != materialToTexture.end() && !it->second.empty()) {
+                    auto texIt = textureMaps.find(it->second);
+                    if (texIt != textureMaps.end()) {
+                        texture = &texIt->second;
+                    }
+                }
+            }
+
+            uint32_t colourValue;
+            if (texture != nullptr && hasTexture) {
+                float texU = w * originalTri.texturePoints[0].x + u * originalTri.texturePoints[1].x +
+                             v * originalTri.texturePoints[2].x;
+                float texV = w * originalTri.texturePoints[0].y + u * originalTri.texturePoints[1].y +
+                             v * originalTri.texturePoints[2].y;
+
+                uint32_t texColour = sampleTexture(*texture, texU, texV);
+
+                int r = static_cast<int>(((texColour >> 16) & 0xFF) * interpolatedBrightness);
+                int g = static_cast<int>(((texColour >> 8)  & 0xFF) * interpolatedBrightness);
+                int b = static_cast<int>(((texColour      ) & 0xFF) * interpolatedBrightness);
+
+                r = glm::clamp(r, 0, 255);
+                g = glm::clamp(g, 0, 255);
+                b = glm::clamp(b, 0, 255);
+                colourValue = (255 << 24) + (r << 16) + (g << 8) + b;
+            } else {
+                Colour base = hit.intersectedTriangle.colour;
+                int r = static_cast<int>(base.red   * interpolatedBrightness);
+                int g = static_cast<int>(base.green * interpolatedBrightness);
+                int b = static_cast<int>(base.blue  * interpolatedBrightness);
+
+                r = glm::clamp(r, 0, 255);
+                g = glm::clamp(g, 0, 255);
+                b = glm::clamp(b, 0, 255);
+                colourValue = (255 << 24) + (r << 16) + (g << 8) + b;
+            }
+
+            window.setPixelColour(x, y, colourValue);
+        }
+    }
 }
 
 void draw(DrawingWindow &window) {
@@ -743,6 +888,8 @@ void draw(DrawingWindow &window) {
         drawRayTracedDiffuse(window, false);
     } else if (renderMode == RAYTRACED_SPECULAR) {
         drawRayTracedDiffuse(window, true);
+    } else if (renderMode == RAYTRACED_SPECULAR_GOURAUD) {
+        drawRayTracedSpecularGouraud(window);
     }
 }
 
@@ -766,6 +913,10 @@ bool handleEvent(SDL_Event event, DrawingWindow &window) {
         }
         else if (event.key.keysym.sym == SDLK_5) {
             renderMode = RAYTRACED_SPECULAR;
+            return true;
+        }
+        else if (event.key.keysym.sym == SDLK_6) {
+            renderMode = RAYTRACED_SPECULAR_GOURAUD;
             return true;
         }
         else if (event.key.keysym.sym == SDLK_o) {
