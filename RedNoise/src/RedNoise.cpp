@@ -929,10 +929,6 @@ bool handleEvent(SDL_Event event, DrawingWindow &window) {
             return true;
         }
     }
-    else if (event.type == SDL_MOUSEBUTTONDOWN) {
-        window.savePPM("output.ppm");
-        window.saveBMP("output.bmp");
-    }
     return false;
 }
 
