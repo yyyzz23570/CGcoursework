@@ -20,6 +20,29 @@
 #include <limits>
 #include <SDL.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
+/*
+ * Render Modes:
+ *   1 - Wireframe
+ *   2 - Rasterized
+ *   3 - Ray Traced Hard Shadow
+ *   4 - Ray Traced Diffuse
+ *   5 - Ray Traced Specular
+ *   6 - Ray Traced Specular Gouraud
+ *
+ * Camera Control:
+ *   LEFT/RIGHT - Move camera left/right
+ *   UP/DOWN    - Move camera up/down
+ *   W/S        - Move camera forward/backward
+ *   A/D        - Rotate scene
+ *   O          - Toggle auto rotation
+ *   R          - Toggle frame recording
+ *   ESC        - Exit
+ */
+
+
 #define WIDTH 640
 #define HEIGHT 480
 
@@ -27,6 +50,21 @@ std::vector<ModelTriangle> modelTriangles;
 std::vector<float> depthBuffer(WIDTH * HEIGHT, -std::numeric_limits<float>::max());
 std::map<std::string, TextureMap> textureMaps;
 std::map<std::string, std::string> materialToTexture;
+
+struct BackgroundTexture {
+    float *data;
+    int width;
+    int height;
+    int channels;
+    
+    BackgroundTexture() : data(nullptr), width(0), height(0), channels(0) {}
+    
+    ~BackgroundTexture() {
+        if (data) stbi_image_free(data);
+    }
+};
+
+BackgroundTexture backgroundTexture;
 
 enum RenderMode {
     WIREFRAME = 0,
@@ -40,7 +78,7 @@ enum RenderMode {
 RenderMode renderMode = RASTERIZED;
 
 glm::vec3 cameraPosition(0.0f, 0.0f, 4.0f);
-float focalLength = 3.5f;
+float focalLength = 3.0f;
 
 float sceneRotationY = 0.0f;
 bool autoRotate = false;
@@ -51,6 +89,57 @@ glm::vec3 lightPosition(0.0f, 0.75f, 0.2f);
 bool isRecording = false;
 int frameCounter = 0;
 
+bool loadBackgroundImage(const std::string &filename) {
+    std::vector<std::string> paths = {
+        filename,
+        "../" + filename,
+        "../../" + filename,
+        "./" + filename
+    };
+
+    for (const auto &path : paths) {
+        backgroundTexture.data = stbi_loadf(path.c_str(), 
+                                           &backgroundTexture.width, 
+                                           &backgroundTexture.height, 
+                                           &backgroundTexture.channels, 
+                                           3);
+        if (backgroundTexture.data) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+glm::vec3 sampleBackgroundColor(const glm::vec3 &rayDirection) {
+    if (!backgroundTexture.data) {
+        return glm::vec3(0.2f, 0.3f, 0.5f);
+    }
+
+    float theta = atan2(rayDirection.z, rayDirection.x);
+    float phi = acos(glm::clamp(rayDirection.y, -1.0f, 1.0f));
+
+    float u = (theta + 3.14159265f) / (2.0f * 3.14159265f);
+    float v = phi / 3.14159265f;
+
+    int texX = static_cast<int>(u * (backgroundTexture.width - 1));
+    int texY = static_cast<int>(v * (backgroundTexture.height - 1));
+
+    texX = glm::clamp(texX, 0, backgroundTexture.width - 1);
+    texY = glm::clamp(texY, 0, backgroundTexture.height - 1);
+
+    int index = (texY * backgroundTexture.width + texX) * 3;
+    
+    if (index >= 0 && index + 2 < backgroundTexture.width * backgroundTexture.height * 3) {
+        return glm::vec3(
+            backgroundTexture.data[index],
+            backgroundTexture.data[index + 1],
+            backgroundTexture.data[index + 2]
+        );
+    }
+
+    return glm::vec3(0.2f, 0.3f, 0.5f);
+}
 
 glm::mat3 rotateY(float angle) {
     float c = cos(angle);
@@ -526,6 +615,13 @@ void drawRayTracedHardShadow(DrawingWindow &window) {
             RayTriangleIntersection hit = getClosestValidIntersection(cameraPosition, rayDir);
 
             if (hit.triangleIndex == static_cast<size_t>(-1)) {
+                // No intersection, render background
+                glm::vec3 bgColor = sampleBackgroundColor(rayDir);
+                int r = glm::clamp(static_cast<int>(bgColor.x * 255.0f), 0, 255);
+                int g = glm::clamp(static_cast<int>(bgColor.y * 255.0f), 0, 255);
+                int b = glm::clamp(static_cast<int>(bgColor.z * 255.0f), 0, 255);
+                uint32_t colourValue = (255 << 24) + (r << 16) + (g << 8) + b;
+                window.setPixelColour(x, y, colourValue);
                 continue;
             }
 
@@ -625,7 +721,16 @@ void drawRayTracedDiffuse(DrawingWindow &window, bool enableSpecular = false) {
             glm::vec3 rayDir = generateRayDirection(x, y);
             RayTriangleIntersection hit = getClosestValidIntersection(cameraPosition, rayDir);
 
-            if (hit.triangleIndex == static_cast<size_t>(-1)) continue;
+            if (hit.triangleIndex == static_cast<size_t>(-1)) {
+                // No intersection, render background
+                glm::vec3 bgColor = sampleBackgroundColor(rayDir);
+                int r = glm::clamp(static_cast<int>(bgColor.x * 255.0f), 0, 255);
+                int g = glm::clamp(static_cast<int>(bgColor.y * 255.0f), 0, 255);
+                int b = glm::clamp(static_cast<int>(bgColor.z * 255.0f), 0, 255);
+                uint32_t colourValue = (255 << 24) + (r << 16) + (g << 8) + b;
+                window.setPixelColour(x, y, colourValue);
+                continue;
+            }
 
             glm::vec3 hitPoint = hit.intersectionPoint;
 
@@ -792,7 +897,16 @@ void drawRayTracedSpecularGouraud(DrawingWindow &window) {
             glm::vec3 rayDir = generateRayDirection(x, y);
             RayTriangleIntersection hit = getClosestValidIntersection(cameraPosition, rayDir);
 
-            if (hit.triangleIndex == static_cast<size_t>(-1)) continue;
+            if (hit.triangleIndex == static_cast<size_t>(-1)) {
+                // No intersection, render background
+                glm::vec3 bgColor = sampleBackgroundColor(rayDir);
+                int r = glm::clamp(static_cast<int>(bgColor.x * 255.0f), 0, 255);
+                int g = glm::clamp(static_cast<int>(bgColor.y * 255.0f), 0, 255);
+                int b = glm::clamp(static_cast<int>(bgColor.z * 255.0f), 0, 255);
+                uint32_t colourValue = (255 << 24) + (r << 16) + (g << 8) + b;
+                window.setPixelColour(x, y, colourValue);
+                continue;
+            }
 
             glm::vec3 hitPoint = hit.intersectionPoint;
 
@@ -876,6 +990,21 @@ void drawRayTracedSpecularGouraud(DrawingWindow &window) {
 void draw(DrawingWindow &window) {
     window.clearPixels();
     clearDepthBuffer();
+    
+    if (backgroundTexture.data) {
+        for (int y = 0; y < static_cast<int>(window.height); ++y) {
+            for (int x = 0; x < static_cast<int>(window.width); ++x) {
+                glm::vec3 rayDir = generateRayDirection(x, y);
+                glm::vec3 bgColor = sampleBackgroundColor(rayDir);
+                int r = glm::clamp(static_cast<int>(bgColor.x * 255.0f), 0, 255);
+                int g = glm::clamp(static_cast<int>(bgColor.y * 255.0f), 0, 255);
+                int b = glm::clamp(static_cast<int>(bgColor.z * 255.0f), 0, 255);
+                uint32_t colourValue = (255 << 24) + (r << 16) + (g << 8) + b;
+                window.setPixelColour(x, y, colourValue);
+            }
+        }
+    }
+    
     if (renderMode == WIREFRAME) {
         drawWireframe(window);
     } else if (renderMode == RASTERIZED) {
@@ -968,6 +1097,8 @@ void updateCamera(float deltaTime) {
 
 int main(int argc, char *argv[]) {
     DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
+
+    loadBackgroundImage("sunset_fairway_2k.hdr");
 
     float boxScale = 0.35f;
     std::vector<ModelTriangle> boxTriangles = loadOBJFile("cornell-box.obj", "cornell-box.mtl", boxScale);
