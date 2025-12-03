@@ -24,7 +24,7 @@
 #define HEIGHT 480
 
 std::vector<ModelTriangle> modelTriangles;
-std::vector<float> depthBuffer(WIDTH * HEIGHT, -std::numeric_limits<float>::infinity());
+std::vector<float> depthBuffer(WIDTH * HEIGHT, -std::numeric_limits<float>::max());
 std::map<std::string, TextureMap> textureMaps;
 std::map<std::string, std::string> materialToTexture;
 
@@ -100,7 +100,7 @@ void drawLine(DrawingWindow &window, CanvasPoint from, CanvasPoint to, Colour co
     for (int i = 0; i < numberOfSteps; i++) {
         int x = round(xValues[i]);
         int y = round(yValues[i]);
-        if (x >= 0 && x < window.width && y >= 0 && y < window.height) {
+        if (x >= 0 && y >= 0 && static_cast<size_t>(x) < window.width && static_cast<size_t>(y) < window.height) {
             window.setPixelColour(x, y, pixelColour);
         }
     }
@@ -449,7 +449,7 @@ void drawRasterized(DrawingWindow &window) {
 }
 
 void clearDepthBuffer() {
-    std::fill(depthBuffer.begin(), depthBuffer.end(), -std::numeric_limits<float>::infinity());
+    std::fill(depthBuffer.begin(), depthBuffer.end(), -std::numeric_limits<float>::max());
 }
 
 glm::vec3 generateRayDirection(int pixelX, int pixelY) {
@@ -466,8 +466,8 @@ RayTriangleIntersection getClosestValidIntersection(const glm::vec3 &origin,
                                                     const glm::vec3 &rayDirection,
                                                     int excludeIndex = -1) {
     RayTriangleIntersection closest;
-    closest.distanceFromCamera = std::numeric_limits<float>::infinity();
-    closest.triangleIndex = -1;
+    closest.distanceFromCamera = std::numeric_limits<float>::max();
+    closest.triangleIndex = static_cast<size_t>(-1);
 
     glm::vec3 d = glm::normalize(rayDirection);
 
@@ -520,12 +520,12 @@ RayTriangleIntersection getClosestValidIntersection(const glm::vec3 &origin,
 void drawRayTracedHardShadow(DrawingWindow &window) {
     float ambient = 0.3f;
 
-    for (int y = 0; y < window.height; ++y) {
-        for (int x = 0; x < window.width; ++x) {
+    for (int y = 0; y < static_cast<int>(window.height); ++y) {
+        for (int x = 0; x < static_cast<int>(window.width); ++x) {
             glm::vec3 rayDir = generateRayDirection(x, y);
             RayTriangleIntersection hit = getClosestValidIntersection(cameraPosition, rayDir);
 
-            if (hit.triangleIndex == -1) {
+            if (hit.triangleIndex == static_cast<size_t>(-1)) {
                 continue;
             }
 
@@ -550,7 +550,7 @@ void drawRayTracedHardShadow(DrawingWindow &window) {
                 getClosestValidIntersection(shadowOrigin, lightDir, static_cast<int>(hit.triangleIndex));
 
             bool inShadow = false;
-            if (shadowHit.triangleIndex != -1 &&
+            if (shadowHit.triangleIndex != static_cast<size_t>(-1) &&
                 shadowHit.distanceFromCamera < distanceToLight) {
                 inShadow = true;
             }
@@ -620,12 +620,12 @@ void drawRayTracedDiffuse(DrawingWindow &window, bool enableSpecular = false) {
     const float lightPower = 15.0f;
     const float PI = 3.14159265f;
 
-    for (int y = 0; y < window.height; ++y) {
-        for (int x = 0; x < window.width; ++x) {
+    for (int y = 0; y < static_cast<int>(window.height); ++y) {
+        for (int x = 0; x < static_cast<int>(window.width); ++x) {
             glm::vec3 rayDir = generateRayDirection(x, y);
             RayTriangleIntersection hit = getClosestValidIntersection(cameraPosition, rayDir);
 
-            if (hit.triangleIndex == -1) continue;
+            if (hit.triangleIndex == static_cast<size_t>(-1)) continue;
 
             glm::vec3 hitPoint = hit.intersectionPoint;
 
@@ -787,12 +787,12 @@ float calculateVertexBrightnessWithSpecular(const glm::vec3 &vertex, const glm::
 }
 
 void drawRayTracedSpecularGouraud(DrawingWindow &window) {
-    for (int y = 0; y < window.height; ++y) {
-        for (int x = 0; x < window.width; ++x) {
+    for (int y = 0; y < static_cast<int>(window.height); ++y) {
+        for (int x = 0; x < static_cast<int>(window.width); ++x) {
             glm::vec3 rayDir = generateRayDirection(x, y);
             RayTriangleIntersection hit = getClosestValidIntersection(cameraPosition, rayDir);
 
-            if (hit.triangleIndex == -1) continue;
+            if (hit.triangleIndex == static_cast<size_t>(-1)) continue;
 
             glm::vec3 hitPoint = hit.intersectionPoint;
 
